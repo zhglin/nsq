@@ -4,6 +4,7 @@ import (
 	"net"
 )
 
+// ClientV1 client信息
 type ClientV1 struct {
 	net.Conn
 	peerInfo *PeerInfo

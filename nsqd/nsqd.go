@@ -228,8 +228,10 @@ func (n *NSQD) GetStartTime() time.Time {
 }
 
 func (n *NSQD) Main() error {
-	exitCh := make(chan error)
+	exitCh := make(chan error) // 异常信息
 	var once sync.Once
+
+	// 退出函数
 	exitFunc := func(err error) {
 		once.Do(func() {
 			if err != nil {
@@ -239,6 +241,7 @@ func (n *NSQD) Main() error {
 		})
 	}
 
+	// tcp服务
 	n.waitGroup.Wrap(func() {
 		exitFunc(protocol.TCPServer(n.tcpListener, n.tcpServer, n.logf))
 	})

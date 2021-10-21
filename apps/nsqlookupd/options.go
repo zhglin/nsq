@@ -6,6 +6,7 @@ import (
 	"github.com/nsqio/nsq/internal/lg"
 )
 
+// 配置文件内容
 type config map[string]interface{}
 
 // Validate settings in the config file, and fatal on errors

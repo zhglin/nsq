@@ -11,6 +11,7 @@ type Client interface {
 }
 
 // Protocol describes the basic behavior of any protocol in the system
+// 描述系统中任何协议的基本行为
 type Protocol interface {
 	NewClient(net.Conn) Client
 	IOLoop(Client) error
@@ -18,12 +19,15 @@ type Protocol interface {
 
 // SendResponse is a server side utility function to prefix data with a length header
 // and write to the supplied Writer
+// SendResponse是一个服务器端实用程序函数，用于为数据添加长度标头前缀，并将数据写入所提供的Writer
 func SendResponse(w io.Writer, data []byte) (int, error) {
+	// 先写入长度
 	err := binary.Write(w, binary.BigEndian, int32(len(data)))
 	if err != nil {
 		return 0, err
 	}
 
+	// 再写入内容
 	n, err := w.Write(data)
 	if err != nil {
 		return 0, err

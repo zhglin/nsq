@@ -7,27 +7,30 @@ import (
 	"time"
 )
 
+// RegistrationDB 客户端信息
 type RegistrationDB struct {
 	sync.RWMutex
 	registrationMap map[Registration]ProducerMap
 }
 
+// Registration 生产者的分类
 type Registration struct {
-	Category string
-	Key      string
-	SubKey   string
+	Category string // 分类 client topic channel
+	Key      string // 唯一      topicName
+	SubKey   string // 二级唯一	channelName
 }
 type Registrations []Registration
 
+// PeerInfo client信息 tcp传来的json字符串
 type PeerInfo struct {
-	lastUpdate       int64
-	id               string
+	lastUpdate       int64  // 最后一个报文的时间戳
+	id               string //  客户端地址
 	RemoteAddress    string `json:"remote_address"`
-	Hostname         string `json:"hostname"`
+	Hostname         string `json:"hostname"` // 主机名
 	BroadcastAddress string `json:"broadcast_address"`
-	TCPPort          int    `json:"tcp_port"`
-	HTTPPort         int    `json:"http_port"`
-	Version          string `json:"version"`
+	TCPPort          int    `json:"tcp_port"`  // tcp端口号
+	HTTPPort         int    `json:"http_port"` // http端口号
+	Version          string `json:"version"`   // 协议版本号
 }
 
 type Producer struct {
@@ -68,7 +71,8 @@ func (r *RegistrationDB) AddRegistration(k Registration) {
 	}
 }
 
-// add a producer to a registration
+// AddProducer add a producer to a registration
+// 注册生产者 不同的分类对应不同的producer
 func (r *RegistrationDB) AddProducer(k Registration, p *Producer) bool {
 	r.Lock()
 	defer r.Unlock()
@@ -84,7 +88,8 @@ func (r *RegistrationDB) AddProducer(k Registration, p *Producer) bool {
 	return !found
 }
 
-// remove a producer from a registration
+// RemoveProducer remove a producer from a registration
+// 从注册中删除生产者 指定的客户端id
 func (r *RegistrationDB) RemoveProducer(k Registration, id string) (bool, int) {
 	r.Lock()
 	defer r.Unlock()
@@ -98,11 +103,13 @@ func (r *RegistrationDB) RemoveProducer(k Registration, id string) (bool, int) {
 	}
 
 	// Note: this leaves keys in the DB even if they have empty lists
+	// 这样即使键列表是空的，它们也会留在DB中
 	delete(producers, id)
 	return removed, len(producers)
 }
 
-// remove a Registration and all it's producers
+// RemoveRegistration remove a Registration and all it's producers
+// 删除一个Registration的所有生产者
 func (r *RegistrationDB) RemoveRegistration(k Registration) {
 	r.Lock()
 	defer r.Unlock()
@@ -113,16 +120,21 @@ func (r *RegistrationDB) needFilter(key string, subkey string) bool {
 	return key == "*" || subkey == "*"
 }
 
+// FindRegistrations 查询producer
 func (r *RegistrationDB) FindRegistrations(category string, key string, subkey string) Registrations {
 	r.RLock()
 	defer r.RUnlock()
+	// 是否有通配符
 	if !r.needFilter(key, subkey) {
+		// 没有通配符所有都是明确的直接map获取即可
 		k := Registration{category, key, subkey}
 		if _, ok := r.registrationMap[k]; ok {
 			return Registrations{k}
 		}
 		return Registrations{}
 	}
+
+	// 有通配符 * 循环所有Registration
 	results := Registrations{}
 	for k := range r.registrationMap {
 		if !k.IsMatch(category, key, subkey) {
@@ -158,6 +170,7 @@ func (r *RegistrationDB) FindProducers(category string, key string, subkey strin
 	return retProducers
 }
 
+// LookupRegistrations 查看所有类型的Registrations中的id
 func (r *RegistrationDB) LookupRegistrations(id string) Registrations {
 	r.RLock()
 	defer r.RUnlock()
@@ -170,7 +183,9 @@ func (r *RegistrationDB) LookupRegistrations(id string) Registrations {
 	return results
 }
 
+// IsMatch 校验Registration是否匹配指定的category，key，subkey
 func (k Registration) IsMatch(category string, key string, subkey string) bool {
+	// 必须是相同的category
 	if category != k.Category {
 		return false
 	}

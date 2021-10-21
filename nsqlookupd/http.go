@@ -17,6 +17,7 @@ type httpServer struct {
 	router     http.Handler
 }
 
+// 创建http服务
 func newHTTPServer(l *NSQLookupd) *httpServer {
 	log := http_api.Log(l.logf)
 
@@ -61,6 +62,7 @@ func newHTTPServer(l *NSQLookupd) *httpServer {
 	return s
 }
 
+// 实现http.Handler接口
 func (s *httpServer) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	s.router.ServeHTTP(w, req)
 }
