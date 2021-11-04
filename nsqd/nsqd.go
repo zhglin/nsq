@@ -39,29 +39,30 @@ type errStore struct {
 
 type NSQD struct {
 	// 64bit atomic vars need to be first for proper alignment on 32bit platforms
-	clientIDSequence int64
+	// 64位原子变量需要首先在32位平台上正确对齐
+	clientIDSequence int64 // client的自增序列号
 
 	sync.RWMutex
 	ctx context.Context
 	// ctxCancel cancels a context that main() is waiting on
 	ctxCancel context.CancelFunc
 
-	opts atomic.Value
+	opts atomic.Value // 配置选项
 
-	dl        *dirlock.DirLock
-	isLoading int32
+	dl        *dirlock.DirLock // 工作目录的锁处理
+	isLoading int32            // 启动中 从本地文件加载topic相关元数据
 	isExiting int32
 	errValue  atomic.Value
-	startTime time.Time
+	startTime time.Time // 当前时间
 
-	topicMap map[string]*Topic
+	topicMap map[string]*Topic // topic信息 name=>Topic
 
 	lookupPeers atomic.Value
 
-	tcpServer     *tcpServer
-	tcpListener   net.Listener
-	httpListener  net.Listener
-	httpsListener net.Listener
+	tcpServer     *tcpServer   // tcp服务端 协议处理
+	tcpListener   net.Listener // tcp的Listener
+	httpListener  net.Listener // http的Listener
+	httpsListener net.Listener // https的Listener
 	tlsConfig     *tls.Config
 
 	poolSize int
@@ -71,12 +72,14 @@ type NSQD struct {
 	exitChan             chan int
 	waitGroup            util.WaitGroupWrapper
 
-	ci *clusterinfo.ClusterInfo
+	ci *clusterinfo.ClusterInfo // 客户端
 }
 
+// New 创建NSQD
 func New(opts *Options) (*NSQD, error) {
 	var err error
 
+	// 内部存储数据的目录
 	dataPath := opts.DataPath
 	if opts.DataPath == "" {
 		cwd, _ := os.Getwd()
@@ -92,7 +95,7 @@ func New(opts *Options) (*NSQD, error) {
 		exitChan:             make(chan int),
 		notifyChan:           make(chan interface{}),
 		optsNotificationChan: make(chan struct{}, 1),
-		dl:                   dirlock.New(dataPath),
+		dl:                   dirlock.New(dataPath), // 目录锁操作
 	}
 	n.ctx, n.ctxCancel = context.WithCancel(context.Background())
 	httpcli := http_api.NewClient(nil, opts.HTTPClientConnectTimeout, opts.HTTPClientRequestTimeout)
@@ -100,7 +103,7 @@ func New(opts *Options) (*NSQD, error) {
 
 	n.lookupPeers.Store([]*lookupPeer{})
 
-	n.swapOpts(opts)
+	n.swapOpts(opts) // 保存配置选项
 	n.errValue.Store(errStore{})
 
 	err = n.dl.Lock()
@@ -138,6 +141,7 @@ func New(opts *Options) (*NSQD, error) {
 	n.logf(LOG_INFO, version.String("nsqd"))
 	n.logf(LOG_INFO, "ID: %d", opts.ID)
 
+	// tcp http https服务
 	n.tcpServer = &tcpServer{nsqd: n}
 	n.tcpListener, err = net.Listen("tcp", opts.TCPAddress)
 	if err != nil {
@@ -175,10 +179,12 @@ func New(opts *Options) (*NSQD, error) {
 	return n, nil
 }
 
+// 获取配置选项
 func (n *NSQD) getOpts() *Options {
 	return n.opts.Load().(*Options)
 }
 
+// 保存配置选项
 func (n *NSQD) swapOpts(opts *Options) {
 	n.opts.Store(opts)
 }
@@ -267,6 +273,7 @@ func (n *NSQD) Main() error {
 	return err
 }
 
+// topic,channel元数据
 type meta struct {
 	Topics []struct {
 		Name     string `json:"name"`
@@ -278,13 +285,16 @@ type meta struct {
 	} `json:"topics"`
 }
 
+// topic,channel元数据文件
 func newMetadataFile(opts *Options) string {
 	return path.Join(opts.DataPath, "nsqd.dat")
 }
 
+// 读取文件内容
 func readOrEmpty(fn string) ([]byte, error) {
 	data, err := ioutil.ReadFile(fn)
 	if err != nil {
+		// 文件已存在的情况下读取错误
 		if !os.IsNotExist(err) {
 			return nil, fmt.Errorf("failed to read metadata from %s - %s", fn, err)
 		}
@@ -292,6 +302,7 @@ func readOrEmpty(fn string) ([]byte, error) {
 	return data, nil
 }
 
+// 同步写入文件
 func writeSyncFile(fn string, data []byte) error {
 	f, err := os.OpenFile(fn, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
 	if err != nil {
@@ -306,12 +317,15 @@ func writeSyncFile(fn string, data []byte) error {
 	return err
 }
 
+// LoadMetadata 读取topic,channel元数据
 func (n *NSQD) LoadMetadata() error {
-	atomic.StoreInt32(&n.isLoading, 1)
+	atomic.StoreInt32(&n.isLoading, 1) // 标记为启动中
 	defer atomic.StoreInt32(&n.isLoading, 0)
 
+	// 元数据文件名
 	fn := newMetadataFile(n.getOpts())
 
+	// 读取文件内容
 	data, err := readOrEmpty(fn)
 	if err != nil {
 		return err
@@ -327,12 +341,13 @@ func (n *NSQD) LoadMetadata() error {
 	}
 
 	for _, t := range m.Topics {
+		// 校验topicName
 		if !protocol.IsValidTopicName(t.Name) {
 			n.logf(LOG_WARN, "skipping creation of invalid topic %s", t.Name)
 			continue
 		}
 		topic := n.GetTopic(t.Name)
-		if t.Paused {
+		if t.Paused { // 是否暂停
 			topic.Pause()
 		}
 		for _, c := range t.Channels {
@@ -345,13 +360,15 @@ func (n *NSQD) LoadMetadata() error {
 				channel.Pause()
 			}
 		}
-		topic.Start()
+		topic.Start() // 启动topic的通知
 	}
 	return nil
 }
 
+// PersistMetadata 记录当前的节点的topic,channel元数据
 func (n *NSQD) PersistMetadata() error {
 	// persist metadata about what topics/channels we have, across restarts
+	// 在重启时，保持关于我们拥有的主题/通道的元数据
 	fileName := newMetadataFile(n.getOpts())
 
 	n.logf(LOG_INFO, "NSQ: persisting topic/channel metadata to %s", fileName)
@@ -359,7 +376,7 @@ func (n *NSQD) PersistMetadata() error {
 	js := make(map[string]interface{})
 	topics := []interface{}{}
 	for _, topic := range n.topicMap {
-		if topic.ephemeral {
+		if topic.ephemeral { // 跳过临时topic
 			continue
 		}
 		topicData := make(map[string]interface{})
@@ -368,7 +385,7 @@ func (n *NSQD) PersistMetadata() error {
 		channels := []interface{}{}
 		topic.Lock()
 		for _, channel := range topic.channelMap {
-			if channel.ephemeral {
+			if channel.ephemeral { // 跳过临时channel
 				continue
 			}
 			channel.Lock()
@@ -401,7 +418,7 @@ func (n *NSQD) PersistMetadata() error {
 		return err
 	}
 	// technically should fsync DataPath here
-
+	// 技术上应该在这里fsync DataPath
 	return nil
 }
 
@@ -447,8 +464,10 @@ func (n *NSQD) Exit() {
 
 // GetTopic performs a thread safe operation
 // to return a pointer to a Topic object (potentially new)
+// GetTopic执行一个线程安全操作，返回一个指向Topic对象(可能是新的)的指针。
 func (n *NSQD) GetTopic(topicName string) *Topic {
 	// most likely we already have this topic, so try read lock first
+	// 读锁，很可能我们已经有了这个主题
 	n.RLock()
 	t, ok := n.topicMap[topicName]
 	n.RUnlock()
@@ -456,13 +475,15 @@ func (n *NSQD) GetTopic(topicName string) *Topic {
 		return t
 	}
 
+	// 写锁时再尝试读取一次，防止被写入
 	n.Lock()
-
 	t, ok = n.topicMap[topicName]
 	if ok {
 		n.Unlock()
 		return t
 	}
+
+	// 创建Topic 并记录
 	deleteCallback := func(t *Topic) {
 		n.DeleteExistingTopic(t.name)
 	}
@@ -476,12 +497,14 @@ func (n *NSQD) GetTopic(topicName string) *Topic {
 
 	// if this topic was created while loading metadata at startup don't do any further initialization
 	// (topic will be "started" after loading completes)
+	// 如果这个topic是在启动时加载元数据时创建的，不要做任何进一步的初始化(topic将在加载完成后被“启动”)
 	if atomic.LoadInt32(&n.isLoading) == 1 {
 		return t
 	}
 
 	// if using lookupd, make a blocking call to get channels and immediately create them
 	// to ensure that all channels receive published messages
+	// 如果使用lookupd，则调用阻塞调用获取通道，并立即创建通道，以确保所有通道都接收到已发布的消息
 	lookupdHTTPAddrs := n.lookupdHTTPAddrs()
 	if len(lookupdHTTPAddrs) > 0 {
 		channelNames, err := n.ci.GetLookupdTopicChannels(t.name, lookupdHTTPAddrs)
@@ -515,6 +538,7 @@ func (n *NSQD) GetExistingTopic(topicName string) (*Topic, error) {
 }
 
 // DeleteExistingTopic removes a topic only if it exists
+// 删除topic
 func (n *NSQD) DeleteExistingTopic(topicName string) error {
 	n.RLock()
 	topic, ok := n.topicMap[topicName]
@@ -526,10 +550,13 @@ func (n *NSQD) DeleteExistingTopic(topicName string) error {
 
 	// delete empties all channels and the topic itself before closing
 	// (so that we dont leave any messages around)
+	// 在关闭之前删除并清空所有通道和主题本身(这样我们不会留下任何消息)
 	//
 	// we do this before removing the topic from map below (with no lock)
 	// so that any incoming writes will error and not create a new topic
 	// to enforce ordering
+	// 我们在从下面的映射中删除主题(没有锁)之前这样做，以便任何传入的写入都将出错，而不会创建新的主题来强制排序
+	// 先关闭，后删除，防止再创建topic
 	topic.Delete()
 
 	n.Lock()
@@ -740,6 +767,7 @@ func buildTLSConfig(opts *Options) (*tls.Config, error) {
 	return tlsConfig, nil
 }
 
+// IsAuthEnabled 是否需要身份校验
 func (n *NSQD) IsAuthEnabled() bool {
 	return len(n.getOpts().AuthHTTPAddresses) != 0
 }

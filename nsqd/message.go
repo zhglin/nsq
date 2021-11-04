@@ -14,10 +14,11 @@ const (
 
 type MessageID [MsgIDLength]byte
 
+// Message 消息体
 type Message struct {
-	ID        MessageID
-	Body      []byte
-	Timestamp int64
+	ID        MessageID // 消息id
+	Body      []byte    // 消息内容
+	Timestamp int64     // 创建的当前时间戳
 	Attempts  uint16
 
 	// for in-flight handling
@@ -25,9 +26,10 @@ type Message struct {
 	clientID   int64
 	pri        int64
 	index      int
-	deferred   time.Duration
+	deferred   time.Duration // 延迟消息
 }
 
+// NewMessage 新建消息体
 func NewMessage(id MessageID, body []byte) *Message {
 	return &Message{
 		ID:        id,
@@ -74,6 +76,7 @@ func (m *Message) WriteTo(w io.Writer) (int64, error) {
 //                        (uint16)
 //                         2-byte
 //                        attempts
+// 解析从磁盘文件读取的消息
 func decodeMessage(b []byte) (*Message, error) {
 	var msg Message
 

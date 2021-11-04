@@ -53,6 +53,7 @@ func (p *program) Init(env svc.Environment) error {
 	}
 	cfg.Validate()
 
+	// 合并配置
 	options.Resolve(opts, flagSet, cfg)
 
 	nsqd, err := nsqd.New(opts)
@@ -64,11 +65,15 @@ func (p *program) Init(env svc.Environment) error {
 	return nil
 }
 
+// Start 启动nsqd
 func (p *program) Start() error {
+	// 本地文件加载topic，channel元数据
 	err := p.nsqd.LoadMetadata()
 	if err != nil {
 		logFatal("failed to load metadata - %s", err)
 	}
+
+	// 当前非临时的topic,channel写入本地文件
 	err = p.nsqd.PersistMetadata()
 	if err != nil {
 		logFatal("failed to persist metadata - %s", err)

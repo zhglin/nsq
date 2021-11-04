@@ -37,7 +37,7 @@ type Consumer interface {
 type Channel struct {
 	// 64bit atomic vars need to be first for proper alignment on 32bit platforms
 	requeueCount uint64
-	messageCount uint64
+	messageCount uint64 // 写入此channel的消息数量
 	timeoutCount uint64
 
 	sync.RWMutex
@@ -53,10 +53,10 @@ type Channel struct {
 	exitMutex     sync.RWMutex
 
 	// state tracking
-	clients        map[int64]Consumer
+	clients        map[int64]Consumer // 已订阅的客户端
 	paused         int32
 	ephemeral      bool
-	deleteCallback func(*Channel)
+	deleteCallback func(*Channel) // 删除channel的函数，临时channel自动删除
 	deleter        sync.Once
 
 	// Stats tracking
@@ -72,6 +72,7 @@ type Channel struct {
 }
 
 // NewChannel creates a new instance of the Channel type and returns a pointer
+// 创建一个Channel类型的新实例并返回一个指针
 func NewChannel(topicName string, channelName string, nsqd *NSQD,
 	deleteCallback func(*Channel)) *Channel {
 
@@ -138,6 +139,7 @@ func (c *Channel) initPQ() {
 }
 
 // Exiting returns a boolean indicating if this channel is closed/exiting
+// 返回一个布尔值，指示此通道是否关闭/退出
 func (c *Channel) Exiting() bool {
 	return atomic.LoadInt32(&c.exitFlag) == 1
 }
@@ -156,6 +158,7 @@ func (c *Channel) exit(deleted bool) error {
 	c.exitMutex.Lock()
 	defer c.exitMutex.Unlock()
 
+	// 先标记exiting 后续关闭客户端
 	if !atomic.CompareAndSwapInt32(&c.exitFlag, 0, 1) {
 		return errors.New("exiting")
 	}
@@ -288,6 +291,7 @@ func (c *Channel) IsPaused() bool {
 }
 
 // PutMessage writes a Message to the queue
+// 将Message写入队列
 func (c *Channel) PutMessage(m *Message) error {
 	c.exitMutex.RLock()
 	defer c.exitMutex.RUnlock()
@@ -317,6 +321,7 @@ func (c *Channel) put(m *Message) error {
 	return nil
 }
 
+// PutMessageDeferred 对此channel写入延迟消息
 func (c *Channel) PutMessageDeferred(msg *Message, timeout time.Duration) {
 	atomic.AddUint64(&c.messageCount, 1)
 	c.StartDeferredTimeout(msg, timeout)
@@ -390,14 +395,17 @@ func (c *Channel) RequeueMessage(clientID int64, id MessageID, timeout time.Dura
 }
 
 // AddClient adds a client to the Channel's client list
+// 将客户端添加到channel的客户端列表
 func (c *Channel) AddClient(clientID int64, client Consumer) error {
 	c.exitMutex.RLock()
 	defer c.exitMutex.RUnlock()
 
+	// channel已退出
 	if c.Exiting() {
 		return errors.New("exiting")
 	}
 
+	// 已添加
 	c.RLock()
 	_, ok := c.clients[clientID]
 	numClients := len(c.clients)
@@ -406,6 +414,7 @@ func (c *Channel) AddClient(clientID int64, client Consumer) error {
 		return nil
 	}
 
+	// 校验订阅的客户端数量
 	maxChannelConsumers := c.nsqd.getOpts().MaxChannelConsumers
 	if maxChannelConsumers != 0 && numClients >= maxChannelConsumers {
 		return fmt.Errorf("consumers for %s:%s exceeds limit of %d",
@@ -419,10 +428,12 @@ func (c *Channel) AddClient(clientID int64, client Consumer) error {
 }
 
 // RemoveClient removes a client from the Channel's client list
+// 从channel的客户端列表中删除客户端
 func (c *Channel) RemoveClient(clientID int64) {
 	c.exitMutex.RLock()
 	defer c.exitMutex.RUnlock()
 
+	// 已标记exiting 后续会自动关闭client
 	if c.Exiting() {
 		return
 	}
@@ -434,10 +445,12 @@ func (c *Channel) RemoveClient(clientID int64) {
 		return
 	}
 
+	// 只是从clients中删除，并不关闭链接
 	c.Lock()
 	delete(c.clients, clientID)
 	c.Unlock()
 
+	// 如果是临时channel并且没有client直接关闭channel
 	if len(c.clients) == 0 && c.ephemeral == true {
 		go c.deleter.Do(func() { c.deleteCallback(c) })
 	}
@@ -456,6 +469,7 @@ func (c *Channel) StartInFlightTimeout(msg *Message, clientID int64, timeout tim
 	return nil
 }
 
+// 延迟队列
 func (c *Channel) StartDeferredTimeout(msg *Message, timeout time.Duration) error {
 	absTs := time.Now().Add(timeout).UnixNano()
 	item := &pqueue.Item{Value: msg, Priority: absTs}

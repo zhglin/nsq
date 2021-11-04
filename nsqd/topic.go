@@ -15,33 +15,34 @@ import (
 
 type Topic struct {
 	// 64bit atomic vars need to be first for proper alignment on 32bit platforms
-	messageCount uint64
-	messageBytes uint64
+	messageCount uint64 // 写入此队列的消息数量
+	messageBytes uint64 // 写入此队列的所有消息长度
 
 	sync.RWMutex
 
 	name              string
-	channelMap        map[string]*Channel
-	backend           BackendQueue
-	memoryMsgChan     chan *Message
-	startChan         chan int
-	exitChan          chan int
-	channelUpdateChan chan int
+	channelMap        map[string]*Channel // topic下面的channel  channelName=>channel
+	backend           BackendQueue        // 后端队列
+	memoryMsgChan     chan *Message       // 内存队列
+	startChan         chan int            // topic启动完成的标记通知
+	exitChan          chan int            // topic退出 不在从把topic消息写入channel
+	channelUpdateChan chan int            // channel变更的通知 (新建 删除)
 	waitGroup         util.WaitGroupWrapper
-	exitFlag          int32
-	idFactory         *guidFactory
+	exitFlag          int32        // 当前topic是否已退出的标记
+	idFactory         *guidFactory // 消息id生成器
 
-	ephemeral      bool
-	deleteCallback func(*Topic)
-	deleter        sync.Once
+	ephemeral      bool         // 是否临时topic
+	deleteCallback func(*Topic) // 删除topic的回调函数
+	deleter        sync.Once    // 控制deleteCallback执行次数
 
-	paused    int32
-	pauseChan chan int
+	paused    int32    // 是否已暂停 向pauseChan发送消息
+	pauseChan chan int // topic暂停的通知标记
 
 	nsqd *NSQD
 }
 
-// Topic constructor
+// NewTopic Topic constructor
+// Topic构造函数
 func NewTopic(topicName string, nsqd *NSQD, deleteCallback func(*Topic)) *Topic {
 	t := &Topic{
 		name:              topicName,
@@ -54,12 +55,14 @@ func NewTopic(topicName string, nsqd *NSQD, deleteCallback func(*Topic)) *Topic 
 		paused:            0,
 		pauseChan:         make(chan int),
 		deleteCallback:    deleteCallback,
-		idFactory:         NewGUIDFactory(nsqd.getOpts().ID),
+		idFactory:         NewGUIDFactory(nsqd.getOpts().ID), // 设置消息id的生成器
 	}
 	// create mem-queue only if size > 0 (do not use unbuffered chan)
+	// 仅当大小为> 0时创建mem-queue(不要使用未缓冲的chan)
 	if nsqd.getOpts().MemQueueSize > 0 {
 		t.memoryMsgChan = make(chan *Message, nsqd.getOpts().MemQueueSize)
 	}
+	// 是否临时topic
 	if strings.HasSuffix(topicName, "#ephemeral") {
 		t.ephemeral = true
 		t.backend = newDummyBackendQueue()
@@ -68,6 +71,7 @@ func NewTopic(topicName string, nsqd *NSQD, deleteCallback func(*Topic)) *Topic 
 			opts := nsqd.getOpts()
 			lg.Logf(opts.Logger, opts.LogLevel, lg.LogLevel(level), f, args...)
 		}
+		// 创建后端队列
 		t.backend = diskqueue.New(
 			topicName,
 			nsqd.getOpts().DataPath,
@@ -80,6 +84,7 @@ func NewTopic(topicName string, nsqd *NSQD, deleteCallback func(*Topic)) *Topic 
 		)
 	}
 
+	// topic的消息写入各个channel
 	t.waitGroup.Wrap(t.messagePump)
 
 	t.nsqd.Notify(t, !t.ephemeral)
@@ -87,6 +92,7 @@ func NewTopic(topicName string, nsqd *NSQD, deleteCallback func(*Topic)) *Topic 
 	return t
 }
 
+// Start 启动topic
 func (t *Topic) Start() {
 	select {
 	case t.startChan <- 1:
@@ -95,6 +101,7 @@ func (t *Topic) Start() {
 }
 
 // Exiting returns a boolean indicating if this topic is closed/exiting
+// 返回一个布尔值，指示此主题是否关闭/退出
 func (t *Topic) Exiting() bool {
 	return atomic.LoadInt32(&t.exitFlag) == 1
 }
@@ -102,11 +109,13 @@ func (t *Topic) Exiting() bool {
 // GetChannel performs a thread safe operation
 // to return a pointer to a Channel object (potentially new)
 // for the given Topic
+// GetChannel执行一个线程安全操作，返回一个指向给定Topic的Channel对象(可能是新的)的指针
 func (t *Topic) GetChannel(channelName string) *Channel {
 	t.Lock()
 	channel, isNew := t.getOrCreateChannel(channelName)
 	t.Unlock()
 
+	// 新建的channel
 	if isNew {
 		// update messagePump state
 		select {
@@ -119,14 +128,17 @@ func (t *Topic) GetChannel(channelName string) *Channel {
 }
 
 // this expects the caller to handle locking
+// 调用方加锁 新建||获取channel
 func (t *Topic) getOrCreateChannel(channelName string) (*Channel, bool) {
 	channel, ok := t.channelMap[channelName]
 	if !ok {
+		// 新建
 		deleteCallback := func(c *Channel) {
 			t.DeleteExistingChannel(c.name)
 		}
+		//创建channel
 		channel = NewChannel(t.name, channelName, t.nsqd, deleteCallback)
-		t.channelMap[channelName] = channel
+		t.channelMap[channelName] = channel // Topic下保存Channel
 		t.nsqd.logf(LOG_INFO, "TOPIC(%s): new channel(%s)", t.name, channel.name)
 		return channel, true
 	}
@@ -144,6 +156,7 @@ func (t *Topic) GetExistingChannel(channelName string) (*Channel, error) {
 }
 
 // DeleteExistingChannel removes a channel from the topic only if it exists
+// 仅在通道存在时从主题中删除该通道
 func (t *Topic) DeleteExistingChannel(channelName string) error {
 	t.RLock()
 	channel, ok := t.channelMap[channelName]
@@ -160,6 +173,9 @@ func (t *Topic) DeleteExistingChannel(channelName string) error {
 	// we do this before removing the channel from map below (with no lock)
 	// so that any incoming subs will error and not create a new channel
 	// to enforce ordering
+
+	// 在关闭之前清空通道(这样我们就不会留下任何消息)
+	// 我们在从下面的map中移除通道(没有锁)之前这样做，以便任何传入的sub将出错，而不会创建一个新的通道来强制排序
 	channel.Delete()
 
 	t.Lock()
@@ -181,9 +197,11 @@ func (t *Topic) DeleteExistingChannel(channelName string) error {
 }
 
 // PutMessage writes a Message to the queue
+// 将Message写入队列
 func (t *Topic) PutMessage(m *Message) error {
 	t.RLock()
 	defer t.RUnlock()
+	// 是否已退出
 	if atomic.LoadInt32(&t.exitFlag) == 1 {
 		return errors.New("exiting")
 	}
@@ -221,9 +239,10 @@ func (t *Topic) PutMessages(msgs []*Message) error {
 	return nil
 }
 
+// 写入消息到当前topic
 func (t *Topic) put(m *Message) error {
 	select {
-	case t.memoryMsgChan <- m:
+	case t.memoryMsgChan <- m: // 内存队列写不进去写入后端队列
 	default:
 		err := writeMessageToBackend(m, t.backend)
 		t.nsqd.SetHealth(err)
@@ -243,6 +262,7 @@ func (t *Topic) Depth() int64 {
 
 // messagePump selects over the in-memory and backend queue and
 // writes messages to every channel for this topic
+// 选择内存和后端队列并将消息写入此主题的每个通道
 func (t *Topic) messagePump() {
 	var msg *Message
 	var buf []byte
@@ -252,6 +272,8 @@ func (t *Topic) messagePump() {
 	var backendChan <-chan []byte
 
 	// do not pass messages before Start(), but avoid blocking Pause() or GetChannel()
+	// 不要在Start()之前传递消息，但要避免阻塞Pause()或GetChannel()
+	// startChan之前的消息直接取出来
 	for {
 		select {
 		case <-t.channelUpdateChan:
@@ -260,31 +282,37 @@ func (t *Topic) messagePump() {
 			continue
 		case <-t.exitChan:
 			goto exit
-		case <-t.startChan:
+		case <-t.startChan: // 未启动之前的消息全部丢弃
 		}
 		break
 	}
+
+	// 获取topic下的所有channel
 	t.RLock()
 	for _, c := range t.channelMap {
 		chans = append(chans, c)
 	}
 	t.RUnlock()
+
+	// 存在channel && topic未暂停，
 	if len(chans) > 0 && !t.IsPaused() {
 		memoryMsgChan = t.memoryMsgChan
 		backendChan = t.backend.ReadChan()
 	}
 
 	// main message loop
+	// 循环把topic的消息写入各个channel
 	for {
 		select {
-		case msg = <-memoryMsgChan:
-		case buf = <-backendChan:
+		case msg = <-memoryMsgChan: // 从内存队列取消息
+		case buf = <-backendChan: // 从后端队列取消息
 			msg, err = decodeMessage(buf)
 			if err != nil {
 				t.nsqd.logf(LOG_ERROR, "failed to decode message - %s", err)
 				continue
 			}
-		case <-t.channelUpdateChan:
+		case <-t.channelUpdateChan: // 此topic下的channel变更
+			// 先清空channel再重新读取最新的channel
 			chans = chans[:0]
 			t.RLock()
 			for _, c := range t.channelMap {
@@ -308,7 +336,7 @@ func (t *Topic) messagePump() {
 				backendChan = t.backend.ReadChan()
 			}
 			continue
-		case <-t.exitChan:
+		case <-t.exitChan: // topic跳出
 			goto exit
 		}
 
@@ -318,15 +346,20 @@ func (t *Topic) messagePump() {
 			// needs a unique instance but...
 			// fastpath to avoid copy if its the first channel
 			// (the topic already created the first copy)
+			// 复制消息，因为每个通道需要一个唯一的实例
 			if i > 0 {
 				chanMsg = NewMessage(msg.ID, msg.Body)
 				chanMsg.Timestamp = msg.Timestamp
 				chanMsg.deferred = msg.deferred
 			}
+
+			// 延迟消息
 			if chanMsg.deferred != 0 {
 				channel.PutMessageDeferred(chanMsg, chanMsg.deferred)
 				continue
 			}
+
+			// 消息写入到channle
 			err := channel.PutMessage(chanMsg)
 			if err != nil {
 				t.nsqd.logf(LOG_ERROR,
@@ -341,6 +374,7 @@ exit:
 }
 
 // Delete empties the topic and all its channels and closes
+// 清空主题及其所有通道并关闭
 func (t *Topic) Delete() error {
 	return t.exit(true)
 }
@@ -485,6 +519,7 @@ func (t *Topic) IsPaused() bool {
 	return atomic.LoadInt32(&t.paused) == 1
 }
 
+// GenerateID 新建消息的id
 func (t *Topic) GenerateID() MessageID {
 	var i int64 = 0
 	for {

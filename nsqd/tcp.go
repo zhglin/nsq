@@ -18,6 +18,7 @@ type Client interface {
 	Stats(string) ClientStats
 }
 
+// tcp服务端 协议处理
 type tcpServer struct {
 	nsqd  *NSQD
 	conns sync.Map
@@ -29,6 +30,9 @@ func (p *tcpServer) Handle(conn net.Conn) {
 	// The client should initialize itself by sending a 4 byte sequence indicating
 	// the version of the protocol that it intends to communicate, this will allow us
 	// to gracefully upgrade the protocol away from text/line oriented to whatever...
+	// 客户端应该通过发送一个4字节的序列来初始化自己，
+	// 该序列指示了它想要通信的协议版本，
+	// 这将允许我们优雅地将协议升级到任何面向text/line…
 	buf := make([]byte, 4)
 	_, err := io.ReadFull(conn, buf)
 	if err != nil {
@@ -41,6 +45,7 @@ func (p *tcpServer) Handle(conn net.Conn) {
 	p.nsqd.logf(LOG_INFO, "CLIENT(%s): desired protocol magic '%s'",
 		conn.RemoteAddr(), protocolMagic)
 
+	// 校验协议版本号
 	var prot protocol.Protocol
 	switch protocolMagic {
 	case "  V2":
@@ -57,7 +62,7 @@ func (p *tcpServer) Handle(conn net.Conn) {
 	client := prot.NewClient(conn)
 	p.conns.Store(conn.RemoteAddr(), client)
 
-	// for循环执行报文解析 以及相应
+	// for循环执行报文解析 以及响应
 	err = prot.IOLoop(client)
 	if err != nil {
 		p.nsqd.logf(LOG_ERROR, "client(%s) - %s", conn.RemoteAddr(), err)

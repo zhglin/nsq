@@ -38,22 +38,26 @@ func SendResponse(w io.Writer, data []byte) (int, error) {
 
 // SendFramedResponse is a server side utility function to prefix data with a length header
 // and frame header and write to the supplied Writer
+// 是一个服务器端实用函数，用于在数据前添加长度报头和帧报头，并写入所提供的Writer
 func SendFramedResponse(w io.Writer, frameType int32, data []byte) (int, error) {
 	beBuf := make([]byte, 4)
 	size := uint32(len(data)) + 4
 
+	// 报文长度
 	binary.BigEndian.PutUint32(beBuf, size)
 	n, err := w.Write(beBuf)
 	if err != nil {
 		return n, err
 	}
 
+	// 报文类型
 	binary.BigEndian.PutUint32(beBuf, uint32(frameType))
 	n, err = w.Write(beBuf)
 	if err != nil {
 		return n + 4, err
 	}
 
+	// 报文内容
 	n, err = w.Write(data)
 	return n + 8, err
 }

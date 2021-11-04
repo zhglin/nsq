@@ -13,19 +13,25 @@ import (
 	"time"
 )
 
-// A custom http.Transport with support for deadline timeouts
+// NewDeadlineTransport A custom http.Transport with support for deadline timeouts
+// 一个自定义http。支持最后期限超时的传输
 func NewDeadlineTransport(connectTimeout time.Duration, requestTimeout time.Duration) *http.Transport {
 	// arbitrary values copied from http.DefaultTransport
 	transport := &http.Transport{
+		// 指定创建TCP连接的拨号函数。
 		DialContext: (&net.Dialer{
 			Timeout:   connectTimeout,
 			KeepAlive: 30 * time.Second,
 			DualStack: true,
 		}).DialContext,
+		// 等待接收服务端的回复的头域的最大时间。零值表示不设置超时。该时间不包括获取回复主体的时间。
 		ResponseHeaderTimeout: requestTimeout,
-		MaxIdleConns:          100,
-		IdleConnTimeout:       90 * time.Second,
-		TLSHandshakeTimeout:   10 * time.Second,
+		// 每个主机下的最大闲置连接。
+		MaxIdleConns: 100,
+		// 链接的最大空闲时间
+		IdleConnTimeout: 90 * time.Second,
+		// 指定等待TLS握手的最大时间
+		TLSHandshakeTimeout: 10 * time.Second,
 	}
 	return transport
 }

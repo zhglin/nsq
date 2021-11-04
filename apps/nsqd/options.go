@@ -67,6 +67,7 @@ func (t *tlsMinVersionOption) String() string {
 type config map[string]interface{}
 
 // Validate settings in the config file, and fatal on errors
+// 配置文件内容的校验 tls，log相关
 func (cfg config) Validate() {
 	// special validation/translation
 	if v, exists := cfg["tls_required"]; exists {

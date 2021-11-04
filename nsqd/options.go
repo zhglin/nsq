@@ -19,21 +19,21 @@ type Options struct {
 	LogPrefix string      `flag:"log-prefix"`
 	Logger    Logger
 
-	TCPAddress               string        `flag:"tcp-address"`
-	HTTPAddress              string        `flag:"http-address"`
-	HTTPSAddress             string        `flag:"https-address"`
+	TCPAddress               string        `flag:"tcp-address"`   // tcp服务ip:port
+	HTTPAddress              string        `flag:"http-address"`  // http服务ip:port
+	HTTPSAddress             string        `flag:"https-address"` // https服务ip:port
 	BroadcastAddress         string        `flag:"broadcast-address"`
 	BroadcastTCPPort         int           `flag:"broadcast-tcp-port"`
 	BroadcastHTTPPort        int           `flag:"broadcast-http-port"`
 	NSQLookupdTCPAddresses   []string      `flag:"lookupd-tcp-address" cfg:"nsqlookupd_tcp_addresses"`
-	AuthHTTPAddresses        []string      `flag:"auth-http-address" cfg:"auth_http_addresses"`
-	HTTPClientConnectTimeout time.Duration `flag:"http-client-connect-timeout" cfg:"http_client_connect_timeout"`
-	HTTPClientRequestTimeout time.Duration `flag:"http-client-request-timeout" cfg:"http_client_request_timeout"`
+	AuthHTTPAddresses        []string      `flag:"auth-http-address" cfg:"auth_http_addresses"`                   // 进行身份校验的请求地址
+	HTTPClientConnectTimeout time.Duration `flag:"http-client-connect-timeout" cfg:"http_client_connect_timeout"` // 身份校验建立请求的链接超时时间
+	HTTPClientRequestTimeout time.Duration `flag:"http-client-request-timeout" cfg:"http_client_request_timeout"` // 身份校验请求响应的超时时间
 
 	// diskqueue options
-	DataPath        string        `flag:"data-path"`
-	MemQueueSize    int64         `flag:"mem-queue-size"`
-	MaxBytesPerFile int64         `flag:"max-bytes-per-file"`
+	DataPath        string        `flag:"data-path"`          // 存储数据的目录
+	MemQueueSize    int64         `flag:"mem-queue-size"`     // 内存中保存的队列数据量
+	MaxBytesPerFile int64         `flag:"max-bytes-per-file"` // 后端队列的文件最大长度
 	SyncEvery       int64         `flag:"sync-every"`
 	SyncTimeout     time.Duration `flag:"sync-timeout"`
 
@@ -46,19 +46,19 @@ type Options struct {
 	// msg and command options
 	MsgTimeout    time.Duration `flag:"msg-timeout"`
 	MaxMsgTimeout time.Duration `flag:"max-msg-timeout"`
-	MaxMsgSize    int64         `flag:"max-msg-size"`
-	MaxBodySize   int64         `flag:"max-body-size"`
+	MaxMsgSize    int64         `flag:"max-msg-size"`  // 一个队列消息的最大长度
+	MaxBodySize   int64         `flag:"max-body-size"` // 支持的最大的报文长度
 	MaxReqTimeout time.Duration `flag:"max-req-timeout"`
-	ClientTimeout time.Duration
+	ClientTimeout time.Duration // 客户端超时时间  /2 = 心跳检查时间
 
 	// client overridable configuration options
-	MaxHeartbeatInterval   time.Duration `flag:"max-heartbeat-interval"`
-	MaxRdyCount            int64         `flag:"max-rdy-count"`
+	MaxHeartbeatInterval   time.Duration `flag:"max-heartbeat-interval"` // 最大的心跳检查间隔
+	MaxRdyCount            int64         `flag:"max-rdy-count"`          // 最大准备接收的消息量
 	MaxOutputBufferSize    int64         `flag:"max-output-buffer-size"`
-	MaxOutputBufferTimeout time.Duration `flag:"max-output-buffer-timeout"`
-	MinOutputBufferTimeout time.Duration `flag:"min-output-buffer-timeout"`
+	MaxOutputBufferTimeout time.Duration `flag:"max-output-buffer-timeout"` // 最大的缓冲区超时时间
+	MinOutputBufferTimeout time.Duration `flag:"min-output-buffer-timeout"` // 最小的缓冲区超时时间
 	OutputBufferTimeout    time.Duration `flag:"output-buffer-timeout"`
-	MaxChannelConsumers    int           `flag:"max-channel-consumers"`
+	MaxChannelConsumers    int           `flag:"max-channel-consumers"` // 一个channel同时订阅的最大客户端数量
 
 	// statsd integration
 	StatsdAddress          string        `flag:"statsd-address"`
@@ -77,7 +77,7 @@ type Options struct {
 	TLSKey              string `flag:"tls-key"`
 	TLSClientAuthPolicy string `flag:"tls-client-auth-policy"`
 	TLSRootCAFile       string `flag:"tls-root-ca-file"`
-	TLSRequired         int    `flag:"tls-required"`
+	TLSRequired         int    `flag:"tls-required"` // 是否开启tls
 	TLSMinVersion       uint16 `flag:"tls-min-version"`
 
 	// compression
@@ -86,6 +86,7 @@ type Options struct {
 	SnappyEnabled   bool `flag:"snappy"`
 }
 
+// NewOptions 默认的配置选项
 func NewOptions() *Options {
 	hostname, err := os.Hostname()
 	if err != nil {

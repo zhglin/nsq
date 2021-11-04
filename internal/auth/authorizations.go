@@ -14,19 +14,21 @@ import (
 )
 
 type Authorization struct {
-	Topic       string   `json:"topic"`
-	Channels    []string `json:"channels"`
-	Permissions []string `json:"permissions"`
+	Topic       string   `json:"topic"`       // 有权限的topic    正则
+	Channels    []string `json:"channels"`    // 有权限的channel  正则
+	Permissions []string `json:"permissions"` // 权限  subscribe || publish
 }
 
+// State 身份认证服务器的响应结果
 type State struct {
-	TTL            int             `json:"ttl"`
-	Authorizations []Authorization `json:"authorizations"`
+	TTL            int             `json:"ttl"`            // 有效的时间
+	Authorizations []Authorization `json:"authorizations"` // 权限
 	Identity       string          `json:"identity"`
 	IdentityURL    string          `json:"identity_url"`
-	Expires        time.Time
+	Expires        time.Time       // 根据ttl计算的过期时间
 }
 
+// HasPermission 是否有permission的授权
 func (a *Authorization) HasPermission(permission string) bool {
 	for _, p := range a.Permissions {
 		if permission == p {
@@ -36,6 +38,7 @@ func (a *Authorization) HasPermission(permission string) bool {
 	return false
 }
 
+// IsAllowed 校验是否授权 必须topic，channel都匹配
 func (a *Authorization) IsAllowed(topic, channel string) bool {
 	if channel != "" {
 		if !a.HasPermission("subscribe") {
@@ -62,6 +65,7 @@ func (a *Authorization) IsAllowed(topic, channel string) bool {
 	return false
 }
 
+// IsAllowed 授权校验
 func (a *State) IsAllowed(topic, channel string) bool {
 	for _, aa := range a.Authorizations {
 		if aa.IsAllowed(topic, channel) {
@@ -71,6 +75,7 @@ func (a *State) IsAllowed(topic, channel string) bool {
 	return false
 }
 
+// IsExpired 授权是否已过期
 func (a *State) IsExpired() bool {
 	if a.Expires.Before(time.Now()) {
 		return true
@@ -78,11 +83,13 @@ func (a *State) IsExpired() bool {
 	return false
 }
 
+// QueryAnyAuthd 多次进行身份校验
 func QueryAnyAuthd(authd []string, remoteIP string, tlsEnabled bool, commonName string, authSecret string,
 	connectTimeout time.Duration, requestTimeout time.Duration) (*State, error) {
 	start := rand.Int()
 	n := len(authd)
 	for i := 0; i < n; i++ {
+		// 随机选地址
 		a := authd[(i+start)%n]
 		authState, err := QueryAuthd(a, remoteIP, tlsEnabled, commonName, authSecret, connectTimeout, requestTimeout)
 		if err != nil {
@@ -94,16 +101,17 @@ func QueryAnyAuthd(authd []string, remoteIP string, tlsEnabled bool, commonName 
 	return nil, errors.New("Unable to access auth server")
 }
 
+// QueryAuthd 发送http请求
 func QueryAuthd(authd string, remoteIP string, tlsEnabled bool, commonName string, authSecret string,
 	connectTimeout time.Duration, requestTimeout time.Duration) (*State, error) {
 	v := url.Values{}
-	v.Set("remote_ip", remoteIP)
+	v.Set("remote_ip", remoteIP) // 设置客户端地址
 	if tlsEnabled {
-		v.Set("tls", "true")
+		v.Set("tls", "true") // tls状态
 	} else {
 		v.Set("tls", "false")
 	}
-	v.Set("secret", authSecret)
+	v.Set("secret", authSecret) // 请求内容
 	v.Set("common_name", commonName)
 
 	var endpoint string
@@ -119,11 +127,11 @@ func QueryAuthd(authd string, remoteIP string, tlsEnabled bool, commonName strin
 		return nil, err
 	}
 
-	// validation on response
+	// validation on response 验证响应
 	for _, auth := range authState.Authorizations {
 		for _, p := range auth.Permissions {
 			switch p {
-			case "subscribe", "publish":
+			case "subscribe", "publish": // 是否
 			default:
 				return nil, fmt.Errorf("unknown permission %s", p)
 			}

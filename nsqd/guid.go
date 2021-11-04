@@ -36,7 +36,7 @@ type guid int64
 type guidFactory struct {
 	sync.Mutex
 
-	nodeID        int64
+	nodeID        int64 // 服务器节点id
 	sequence      int64
 	lastTimestamp int64
 	lastID        guid

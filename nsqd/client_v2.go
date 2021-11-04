@@ -15,16 +15,17 @@ import (
 	"github.com/nsqio/nsq/internal/auth"
 )
 
-const defaultBufferSize = 16 * 1024
+const defaultBufferSize = 16 * 1024 // 缓冲区大小
 
 const (
-	stateInit = iota
+	stateInit = iota // 已初始化
 	stateDisconnected
 	stateConnected
-	stateSubscribed
+	stateSubscribed // 已订阅
 	stateClosing
 )
 
+// 客户端标识信息
 type identifyDataV2 struct {
 	ClientID            string `json:"client_id"`
 	Hostname            string `json:"hostname"`
@@ -120,9 +121,11 @@ func (s ClientV2Stats) String() string {
 	)
 }
 
+// 客户端链接
 type clientV2 struct {
 	// 64bit atomic vars need to be first for proper alignment on 32bit platforms
-	ReadyCount    int64
+	// 64位原子变量需要首先在32位平台上正确对齐
+	ReadyCount    int64 // 准备接收的消息数量
 	InFlightCount int64
 	MessageCount  uint64
 	FinishCount   uint64
@@ -133,55 +136,58 @@ type clientV2 struct {
 	writeLock sync.RWMutex
 	metaLock  sync.RWMutex
 
-	ID        int64
+	ID        int64 // 自增序列号
 	nsqd      *NSQD
-	UserAgent string
+	UserAgent string // Identify报文
 
 	// original connection
-	net.Conn
+	net.Conn // tcp原始连接
 
 	// connections based on negotiated features
 	tlsConn     *tls.Conn
-	flateWriter *flate.Writer
+	flateWriter *flate.Writer // 支持压缩的链接
 
 	// reading/writing interfaces
-	Reader *bufio.Reader
-	Writer *bufio.Writer
+	Reader *bufio.Reader // 读缓冲
+	Writer *bufio.Writer // 写缓冲
 
 	OutputBufferSize    int
 	OutputBufferTimeout time.Duration
 
-	HeartbeatInterval time.Duration
+	HeartbeatInterval time.Duration // 心跳检查间隔时间
 
 	MsgTimeout time.Duration
 
-	State          int32
-	ConnectTime    time.Time
-	Channel        *Channel
-	ReadyStateChan chan int
+	State          int32     // 链接状态
+	ConnectTime    time.Time // 接收到链接的当前时间
+	Channel        *Channel  // 订阅的channel
+	ReadyStateChan chan int  // 准备接收消息数量的变更
 	ExitChan       chan int
 
-	ClientID string
-	Hostname string
+	ClientID string // 客户端标识 ip identify报文
+	Hostname string // 客户端标识 ip	Identify报文
 
-	SampleRate int32
+	SampleRate int32 // 采样率
 
 	IdentifyEventChan chan identifyEvent
-	SubEventChan      chan *Channel
+	SubEventChan      chan *Channel // 已订阅的channel
 
-	TLS     int32
-	Snappy  int32
-	Deflate int32
+	TLS     int32 // 是否是TLS链接
+	Snappy  int32 // 是否进行Snappy报文压缩 1是
+	Deflate int32 // 是否进行Deflate报文压缩 1是
 
 	// re-usable buffer for reading the 4-byte lengths off the wire
+	// 4字节的报文长度
 	lenBuf   [4]byte
-	lenSlice []byte
+	lenSlice []byte // lenSlice = lenBuf[:]
 
-	AuthSecret string
-	AuthState  *auth.State
+	AuthSecret string      // 认证报文
+	AuthState  *auth.State // 身份认证结果
 }
 
+// 创建客户端链接
 func newClientV2(id int64, conn net.Conn, nsqd *NSQD) *clientV2 {
+	// 客户端的标识 host
 	var identifier string
 	if conn != nil {
 		identifier, _, _ = net.SplitHostPort(conn.RemoteAddr().String())
@@ -193,8 +199,8 @@ func newClientV2(id int64, conn net.Conn, nsqd *NSQD) *clientV2 {
 
 		Conn: conn,
 
-		Reader: bufio.NewReaderSize(conn, defaultBufferSize),
-		Writer: bufio.NewWriterSize(conn, defaultBufferSize),
+		Reader: bufio.NewReaderSize(conn, defaultBufferSize), // 最少有size尺寸的缓冲
+		Writer: bufio.NewWriterSize(conn, defaultBufferSize), // 最少有size尺寸的缓冲
 
 		OutputBufferSize:    defaultBufferSize,
 		OutputBufferTimeout: nsqd.getOpts().OutputBufferTimeout,
@@ -203,10 +209,11 @@ func newClientV2(id int64, conn net.Conn, nsqd *NSQD) *clientV2 {
 
 		// ReadyStateChan has a buffer of 1 to guarantee that in the event
 		// there is a race the state update is not lost
+		// ReadyStateChan有一个1的缓冲区，以保证在发生竞赛时状态更新不会丢失
 		ReadyStateChan: make(chan int, 1),
 		ExitChan:       make(chan int),
-		ConnectTime:    time.Now(),
-		State:          stateInit,
+		ConnectTime:    time.Now(), // 链接时间
+		State:          stateInit,  // 链接状态
 
 		ClientID: identifier,
 		Hostname: identifier,
@@ -215,6 +222,7 @@ func newClientV2(id int64, conn net.Conn, nsqd *NSQD) *clientV2 {
 		IdentifyEventChan: make(chan identifyEvent, 1),
 
 		// heartbeats are client configurable but default to 30s
+		// 心跳是客户端可配置的，但默认为30秒
 		HeartbeatInterval: nsqd.getOpts().ClientTimeout / 2,
 
 		pubCounts: make(map[string]uint64),
@@ -223,6 +231,7 @@ func newClientV2(id int64, conn net.Conn, nsqd *NSQD) *clientV2 {
 	return c
 }
 
+// 客户端地址
 func (c *clientV2) String() string {
 	return c.RemoteAddr().String()
 }
@@ -237,6 +246,7 @@ func (c *clientV2) Type() int {
 	return typeConsumer
 }
 
+// Identify 客户端上报的客户端信息
 func (c *clientV2) Identify(data identifyDataV2) error {
 	c.nsqd.logf(LOG_INFO, "[%s] IDENTIFY: %+v", c, data)
 
@@ -406,6 +416,7 @@ func (c *clientV2) IsReadyForMessages() bool {
 	return true
 }
 
+// SetReadyCount 准备接收的消息数量
 func (c *clientV2) SetReadyCount(count int64) {
 	oldCount := atomic.SwapInt64(&c.ReadyCount, count)
 
@@ -414,10 +425,12 @@ func (c *clientV2) SetReadyCount(count int64) {
 	}
 }
 
+// 写入变更
 func (c *clientV2) tryUpdateReadyState() {
 	// you can always *try* to write to ReadyStateChan because in the cases
 	// where you cannot the message pump loop would have iterated anyway.
 	// the atomic integer operations guarantee correctness of the value.
+	// 您总是可以*尝试*写入ReadyStateChan，因为在您不能执行消息泵循环的情况下，无论如何都会迭代。原子整型操作保证值的正确性。
 	select {
 	case c.ReadyStateChan <- 1:
 	default:
@@ -472,6 +485,7 @@ func (c *clientV2) UnPause() {
 	c.tryUpdateReadyState()
 }
 
+// SetHeartbeatInterval 设置HeartbeatInterval心跳检查
 func (c *clientV2) SetHeartbeatInterval(desiredInterval int) error {
 	c.writeLock.Lock()
 	defer c.writeLock.Unlock()
@@ -491,6 +505,7 @@ func (c *clientV2) SetHeartbeatInterval(desiredInterval int) error {
 	return nil
 }
 
+// SetOutputBuffer 设置缓冲区超时时间
 func (c *clientV2) SetOutputBuffer(desiredSize int, desiredTimeout int) error {
 	c.writeLock.Lock()
 	defer c.writeLock.Unlock()
@@ -558,6 +573,7 @@ func (c *clientV2) SetMsgTimeout(msgTimeout int) error {
 	return nil
 }
 
+// UpgradeTLS 升级成tls
 func (c *clientV2) UpgradeTLS() error {
 	c.writeLock.Lock()
 	defer c.writeLock.Unlock()
@@ -578,6 +594,7 @@ func (c *clientV2) UpgradeTLS() error {
 	return nil
 }
 
+// UpgradeDeflate 读写报文升级成压缩报文
 func (c *clientV2) UpgradeDeflate(level int) error {
 	c.writeLock.Lock()
 	defer c.writeLock.Unlock()
@@ -615,6 +632,7 @@ func (c *clientV2) UpgradeSnappy() error {
 	return nil
 }
 
+// Flush 将任何缓冲数据写入底层io.Writer。
 func (c *clientV2) Flush() error {
 	var zeroTime time.Time
 	if c.HeartbeatInterval > 0 {
@@ -628,6 +646,7 @@ func (c *clientV2) Flush() error {
 		return err
 	}
 
+	// 压缩的链接
 	if c.flateWriter != nil {
 		return c.flateWriter.Flush()
 	}
@@ -635,14 +654,17 @@ func (c *clientV2) Flush() error {
 	return nil
 }
 
+// QueryAuthd 身份认证
 func (c *clientV2) QueryAuthd() error {
+	// 客户端地址
 	remoteIP, _, err := net.SplitHostPort(c.String())
 	if err != nil {
 		return err
 	}
 
+	// 客户端是否使用tls链接
 	tlsEnabled := atomic.LoadInt32(&c.TLS) == 1
-	commonName := ""
+	commonName := "" // tls证书信息
 	if tlsEnabled {
 		tlsConnState := c.tlsConn.ConnectionState()
 		if len(tlsConnState.PeerCertificates) > 0 {
@@ -650,6 +672,7 @@ func (c *clientV2) QueryAuthd() error {
 		}
 	}
 
+	// 身份验证
 	authState, err := auth.QueryAnyAuthd(c.nsqd.getOpts().AuthHTTPAddresses,
 		remoteIP, tlsEnabled, commonName, c.AuthSecret,
 		c.nsqd.getOpts().HTTPClientConnectTimeout,
@@ -657,31 +680,36 @@ func (c *clientV2) QueryAuthd() error {
 	if err != nil {
 		return err
 	}
-	c.AuthState = authState
+	c.AuthState = authState // 设置认证的结果信息
 	return nil
 }
 
+// Auth 身份认证
 func (c *clientV2) Auth(secret string) error {
 	c.AuthSecret = secret
 	return c.QueryAuthd()
 }
 
+// IsAuthorized 是否对topic，channel授权
 func (c *clientV2) IsAuthorized(topic, channel string) (bool, error) {
 	if c.AuthState == nil {
 		return false, nil
 	}
+	// 授权是否已过期，过期重新认证授权
 	if c.AuthState.IsExpired() {
 		err := c.QueryAuthd()
 		if err != nil {
 			return false, err
 		}
 	}
+	// 校验是否已对topic,channel授权
 	if c.AuthState.IsAllowed(topic, channel) {
 		return true, nil
 	}
 	return false, nil
 }
 
+// HasAuthorizations 是否已进行身份校验
 func (c *clientV2) HasAuthorizations() bool {
 	if c.AuthState != nil {
 		return len(c.AuthState.Authorizations) != 0

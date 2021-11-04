@@ -61,7 +61,8 @@ func NewRegistrationDB() *RegistrationDB {
 	}
 }
 
-// add a registration key
+// AddRegistration add a registration key
+// http协议的producer  没有client标识
 func (r *RegistrationDB) AddRegistration(k Registration) {
 	r.Lock()
 	defer r.Unlock()
