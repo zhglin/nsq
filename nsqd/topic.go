@@ -87,6 +87,7 @@ func NewTopic(topicName string, nsqd *NSQD, deleteCallback func(*Topic)) *Topic 
 	// topic的消息写入各个channel
 	t.waitGroup.Wrap(t.messagePump)
 
+	// 通知nsqd持久化
 	t.nsqd.Notify(t, !t.ephemeral)
 
 	return t
@@ -215,6 +216,7 @@ func (t *Topic) PutMessage(m *Message) error {
 }
 
 // PutMessages writes multiple Messages to the queue
+// 将多个消息写入队列
 func (t *Topic) PutMessages(msgs []*Message) error {
 	t.RLock()
 	defer t.RUnlock()
@@ -226,7 +228,7 @@ func (t *Topic) PutMessages(msgs []*Message) error {
 
 	for i, m := range msgs {
 		err := t.put(m)
-		if err != nil {
+		if err != nil { // 写入后端队列异常
 			atomic.AddUint64(&t.messageCount, uint64(i))
 			atomic.AddUint64(&t.messageBytes, uint64(messageTotalBytes))
 			return err
@@ -245,7 +247,7 @@ func (t *Topic) put(m *Message) error {
 	case t.memoryMsgChan <- m: // 内存队列写不进去写入后端队列
 	default:
 		err := writeMessageToBackend(m, t.backend)
-		t.nsqd.SetHealth(err)
+		t.nsqd.SetHealth(err) // nsqd记录异常
 		if err != nil {
 			t.nsqd.logf(LOG_ERROR,
 				"TOPIC(%s) ERROR: failed to write message to backend - %s",

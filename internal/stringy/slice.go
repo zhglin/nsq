@@ -26,6 +26,7 @@ func Union(s []string, a []string) []string {
 	return s
 }
 
+// Uniq 去重
 func Uniq(s []string) (r []string) {
 outerLoop:
 	for _, entry := range s {

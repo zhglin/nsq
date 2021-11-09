@@ -19,29 +19,30 @@ type Options struct {
 	LogPrefix string      `flag:"log-prefix"`
 	Logger    Logger
 
-	TCPAddress               string        `flag:"tcp-address"`   // tcp服务ip:port
-	HTTPAddress              string        `flag:"http-address"`  // http服务ip:port
-	HTTPSAddress             string        `flag:"https-address"` // https服务ip:port
-	BroadcastAddress         string        `flag:"broadcast-address"`
-	BroadcastTCPPort         int           `flag:"broadcast-tcp-port"`
-	BroadcastHTTPPort        int           `flag:"broadcast-http-port"`
-	NSQLookupdTCPAddresses   []string      `flag:"lookupd-tcp-address" cfg:"nsqlookupd_tcp_addresses"`
+	TCPAddress               string        `flag:"tcp-address"`                                                   // tcp服务ip:port
+	HTTPAddress              string        `flag:"http-address"`                                                  // http服务ip:port
+	HTTPSAddress             string        `flag:"https-address"`                                                 // https服务ip:port
+	BroadcastAddress         string        `flag:"broadcast-address"`                                             // 外网ip
+	BroadcastTCPPort         int           `flag:"broadcast-tcp-port"`                                            // 外网tcp端口号
+	BroadcastHTTPPort        int           `flag:"broadcast-http-port"`                                           // 外网http端口号
+	NSQLookupdTCPAddresses   []string      `flag:"lookupd-tcp-address" cfg:"nsqlookupd_tcp_addresses"`            //lookupd地址
 	AuthHTTPAddresses        []string      `flag:"auth-http-address" cfg:"auth_http_addresses"`                   // 进行身份校验的请求地址
 	HTTPClientConnectTimeout time.Duration `flag:"http-client-connect-timeout" cfg:"http_client_connect_timeout"` // 身份校验建立请求的链接超时时间
 	HTTPClientRequestTimeout time.Duration `flag:"http-client-request-timeout" cfg:"http_client_request_timeout"` // 身份校验请求响应的超时时间
 
 	// diskqueue options
 	DataPath        string        `flag:"data-path"`          // 存储数据的目录
-	MemQueueSize    int64         `flag:"mem-queue-size"`     // 内存中保存的队列数据量
+	MemQueueSize    int64         `flag:"mem-queue-size"`     // 内存中保存的消息数量 topic,channel
 	MaxBytesPerFile int64         `flag:"max-bytes-per-file"` // 后端队列的文件最大长度
 	SyncEvery       int64         `flag:"sync-every"`
 	SyncTimeout     time.Duration `flag:"sync-timeout"`
 
-	QueueScanInterval        time.Duration
-	QueueScanRefreshInterval time.Duration
-	QueueScanSelectionCount  int `flag:"queue-scan-selection-count"`
-	QueueScanWorkerPoolMax   int `flag:"queue-scan-worker-pool-max"`
-	QueueScanDirtyPercent    float64
+	// 延迟队列，inFlight队列定时扫描相关配置
+	QueueScanInterval        time.Duration // channel扫描时间间隔
+	QueueScanRefreshInterval time.Duration // 调整工作协程数的间隔时间
+	QueueScanSelectionCount  int           `flag:"queue-scan-selection-count"` // 一个时间间隔扫描的channel数量
+	QueueScanWorkerPoolMax   int           `flag:"queue-scan-worker-pool-max"` // 最大开启的工作协程数
+	QueueScanDirtyPercent    float64       // 处理成功的百分比，超过就重新随机选channel重试
 
 	// msg and command options
 	MsgTimeout    time.Duration `flag:"msg-timeout"`
@@ -55,8 +56,8 @@ type Options struct {
 	MaxHeartbeatInterval   time.Duration `flag:"max-heartbeat-interval"` // 最大的心跳检查间隔
 	MaxRdyCount            int64         `flag:"max-rdy-count"`          // 最大准备接收的消息量
 	MaxOutputBufferSize    int64         `flag:"max-output-buffer-size"`
-	MaxOutputBufferTimeout time.Duration `flag:"max-output-buffer-timeout"` // 最大的缓冲区超时时间
-	MinOutputBufferTimeout time.Duration `flag:"min-output-buffer-timeout"` // 最小的缓冲区超时时间
+	MaxOutputBufferTimeout time.Duration `flag:"max-output-buffer-timeout"` // 最大的写缓冲区超时时间
+	MinOutputBufferTimeout time.Duration `flag:"min-output-buffer-timeout"` // 最小的写缓冲区超时时间
 	OutputBufferTimeout    time.Duration `flag:"output-buffer-timeout"`
 	MaxChannelConsumers    int           `flag:"max-channel-consumers"` // 一个channel同时订阅的最大客户端数量
 

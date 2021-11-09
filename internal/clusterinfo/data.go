@@ -34,11 +34,13 @@ func (l ErrList) Errors() []error {
 	return l
 }
 
+// ClusterInfo lookupd客户端
 type ClusterInfo struct {
 	log    lg.AppLogFunc
 	client *http_api.Client
 }
 
+// New 创建clusterInfo
 func New(log lg.AppLogFunc, client *http_api.Client) *ClusterInfo {
 	return &ClusterInfo{
 		log:    log,
@@ -119,16 +121,19 @@ func (c *ClusterInfo) GetLookupdTopics(lookupdHTTPAddrs []string) ([]string, err
 
 // GetLookupdTopicChannels returns a []string containing a union of all the channels
 // from all the given lookupd for the given topic
+// 返回一个[]string，其中包含给定主题的所有给定查询的所有channel的集合
 func (c *ClusterInfo) GetLookupdTopicChannels(topic string, lookupdHTTPAddrs []string) ([]string, error) {
 	var channels []string
 	var lock sync.Mutex
 	var wg sync.WaitGroup
 	var errs []error
 
+	// 响应结构体
 	type respType struct {
 		Channels []string `json:"channels"`
 	}
 
+	// 访问所有lookupd
 	for _, addr := range lookupdHTTPAddrs {
 		wg.Add(1)
 		go func(addr string) {
@@ -146,6 +151,7 @@ func (c *ClusterInfo) GetLookupdTopicChannels(topic string, lookupdHTTPAddrs []s
 				return
 			}
 
+			// 合并所有查询结果
 			lock.Lock()
 			defer lock.Unlock()
 			channels = append(channels, resp.Channels...)
@@ -153,13 +159,13 @@ func (c *ClusterInfo) GetLookupdTopicChannels(topic string, lookupdHTTPAddrs []s
 	}
 	wg.Wait()
 
+	// 所有lookupd节点都有问题
 	if len(errs) == len(lookupdHTTPAddrs) {
 		return nil, fmt.Errorf("Failed to query any nsqlookupd: %s", ErrList(errs))
 	}
 
 	channels = stringy.Uniq(channels)
 	sort.Strings(channels)
-
 	if len(errs) > 0 {
 		return channels, ErrList(errs)
 	}
@@ -167,6 +173,7 @@ func (c *ClusterInfo) GetLookupdTopicChannels(topic string, lookupdHTTPAddrs []s
 }
 
 // GetLookupdProducers returns Producers of all the nsqd connected to the given lookupds
+// 返回连接到给定查找的所有nsqd的生产者
 func (c *ClusterInfo) GetLookupdProducers(lookupdHTTPAddrs []string) (Producers, error) {
 	var producers []*Producer
 	var lock sync.Mutex

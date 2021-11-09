@@ -16,9 +16,9 @@ import (
 type NSQLookupd struct {
 	sync.RWMutex
 	opts         *Options     // 配置信息
-	tcpListener  net.Listener // 接收客户端链接
-	httpListener net.Listener
-	tcpServer    *tcpServer // 处理客户端链接
+	tcpListener  net.Listener // 接收客户端的tcp链接
+	httpListener net.Listener // 接收客户端的http链接
+	tcpServer    *tcpServer   // 处理客户端链接
 	waitGroup    util.WaitGroupWrapper
 	DB           *RegistrationDB
 }

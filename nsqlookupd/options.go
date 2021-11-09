@@ -14,9 +14,9 @@ type Options struct {
 	LogPrefix string      `flag:"log-prefix"`
 	Logger    Logger
 
-	TCPAddress       string `flag:"tcp-address"`  // ip地址端口号
-	HTTPAddress      string `flag:"http-address"` // ip地址端口号
-	BroadcastAddress string `flag:"broadcast-address"`
+	TCPAddress       string `flag:"tcp-address"`       // listen ip地址端口号
+	HTTPAddress      string `flag:"http-address"`      // listen http地址端口号
+	BroadcastAddress string `flag:"broadcast-address"` // http访问的地址
 
 	InactiveProducerTimeout time.Duration `flag:"inactive-producer-timeout"`
 	TombstoneLifetime       time.Duration `flag:"tombstone-lifetime"`

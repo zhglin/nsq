@@ -14,7 +14,7 @@ func TestPriorityQueue(t *testing.T) {
 	pq := newInFlightPqueue(c)
 
 	for i := 0; i < c+1; i++ {
-		pq.Push(&Message{clientID: int64(i), pri: int64(i)})
+		pq.Push(&Message{clientID: int64(i), pri: int64(rand.Int())})
 	}
 	test.Equal(t, c+1, len(pq))
 	test.Equal(t, c*2, cap(pq))

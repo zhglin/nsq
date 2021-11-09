@@ -52,12 +52,12 @@ type NSQD struct {
 	dl        *dirlock.DirLock // 工作目录的锁处理
 	isLoading int32            // 启动中 从本地文件加载topic相关元数据
 	isExiting int32
-	errValue  atomic.Value
-	startTime time.Time // 当前时间
+	errValue  atomic.Value // 记录操作中的error
+	startTime time.Time    // 当前时间
 
 	topicMap map[string]*Topic // topic信息 name=>Topic
 
-	lookupPeers atomic.Value
+	lookupPeers atomic.Value // lookupd的链接
 
 	tcpServer     *tcpServer   // tcp服务端 协议处理
 	tcpListener   net.Listener // tcp的Listener
@@ -65,14 +65,14 @@ type NSQD struct {
 	httpsListener net.Listener // https的Listener
 	tlsConfig     *tls.Config
 
-	poolSize int
+	poolSize int // 处理延迟消息以及inFlight消息的协程数
 
-	notifyChan           chan interface{}
-	optsNotificationChan chan struct{}
-	exitChan             chan int
+	notifyChan           chan interface{} // channel的变更通知
+	optsNotificationChan chan struct{}    // NSQLookupdTCPAddresses配置的变更通知
+	exitChan             chan int         // nsqd退出的通知
 	waitGroup            util.WaitGroupWrapper
 
-	ci *clusterinfo.ClusterInfo // 客户端
+	ci *clusterinfo.ClusterInfo // lookupd的操作接口
 }
 
 // New 创建NSQD
@@ -190,6 +190,7 @@ func (n *NSQD) swapOpts(opts *Options) {
 	n.opts.Store(opts)
 }
 
+// NSQLookupdTCPAddresses的变更
 func (n *NSQD) triggerOptsNotification() {
 	select {
 	case n.optsNotificationChan <- struct{}{}:
@@ -275,7 +276,9 @@ func (n *NSQD) Main() error {
 		})
 	}
 
+	// 定时处理延迟消息以及inFlight消息
 	n.waitGroup.Wrap(n.queueScanLoop)
+	// lookupd链接
 	n.waitGroup.Wrap(n.lookupLoop)
 	if n.getOpts().StatsdAddress != "" {
 		n.waitGroup.Wrap(n.statsdLoop)
@@ -516,7 +519,7 @@ func (n *NSQD) GetTopic(topicName string) *Topic {
 
 	// if using lookupd, make a blocking call to get channels and immediately create them
 	// to ensure that all channels receive published messages
-	// 如果使用lookupd，则调用阻塞调用获取通道，并立即创建通道，以确保所有通道都接收到已发布的消息
+	// 如果使用lookupd，则阻塞调用获取channel，并立即创建channel，以确保所有通道都接收到已发布的消息
 	lookupdHTTPAddrs := n.lookupdHTTPAddrs()
 	if len(lookupdHTTPAddrs) > 0 {
 		channelNames, err := n.ci.GetLookupdTopicChannels(t.name, lookupdHTTPAddrs)
@@ -578,10 +581,12 @@ func (n *NSQD) DeleteExistingTopic(topicName string) error {
 	return nil
 }
 
+// Notify topic,channel元数据的变更记录
 func (n *NSQD) Notify(v interface{}, persist bool) {
 	// since the in-memory metadata is incomplete,
 	// should not persist metadata while loading it.
 	// nsqd will call `PersistMetadata` it after loading
+	// 由于内存中的元数据是不完整的，所以在加载元数据时不应该持久化它。nsqd将在加载后调用' PersistMetadata '
 	loading := atomic.LoadInt32(&n.isLoading) == 1
 	n.waitGroup.Wrap(func() {
 		// by selecting on exitChan we guarantee that
@@ -603,6 +608,7 @@ func (n *NSQD) Notify(v interface{}, persist bool) {
 }
 
 // channels returns a flat slice of all channels in all topics
+// 返回所有topic中所有channel的切片
 func (n *NSQD) channels() []*Channel {
 	var channels []*Channel
 	n.RLock()
@@ -620,8 +626,9 @@ func (n *NSQD) channels() []*Channel {
 // resizePool adjusts the size of the pool of queueScanWorker goroutines
 //
 // 	1 <= pool <= min(num * 0.25, QueueScanWorkerPoolMax)
-//
+// 调整queueScanWorker goroutine池的大小 num:总channel数
 func (n *NSQD) resizePool(num int, workCh chan *Channel, responseCh chan bool, closeCh chan int) {
+	// 需要开启的协程数
 	idealPoolSize := int(float64(num) * 0.25)
 	if idealPoolSize < 1 {
 		idealPoolSize = 1
@@ -629,14 +636,14 @@ func (n *NSQD) resizePool(num int, workCh chan *Channel, responseCh chan bool, c
 		idealPoolSize = n.getOpts().QueueScanWorkerPoolMax
 	}
 	for {
-		if idealPoolSize == n.poolSize {
+		if idealPoolSize == n.poolSize { // 刚好相等
 			break
-		} else if idealPoolSize < n.poolSize {
+		} else if idealPoolSize < n.poolSize { // 已开的协程数超过限制
 			// contract
-			closeCh <- 1
+			closeCh <- 1 // 通知queueScanWorker关闭一个
 			n.poolSize--
 		} else {
-			// expand
+			// expand 增加一个协程处理
 			n.waitGroup.Wrap(func() {
 				n.queueScanWorker(workCh, responseCh, closeCh)
 			})
@@ -647,12 +654,14 @@ func (n *NSQD) resizePool(num int, workCh chan *Channel, responseCh chan bool, c
 
 // queueScanWorker receives work (in the form of a channel) from queueScanLoop
 // and processes the deferred and in-flight queues
+// 从queueScanLoop接收工作(以通道的形式)，并处理延迟的和正在运行的队列
 func (n *NSQD) queueScanWorker(workCh chan *Channel, responseCh chan bool, closeCh chan int) {
 	for {
 		select {
 		case c := <-workCh:
 			now := time.Now().UnixNano()
 			dirty := false
+			// 未FIN的消息处理
 			if c.processInFlightQueue(now) {
 				dirty = true
 			}
@@ -660,7 +669,7 @@ func (n *NSQD) queueScanWorker(workCh chan *Channel, responseCh chan bool, close
 				dirty = true
 			}
 			responseCh <- dirty
-		case <-closeCh:
+		case <-closeCh: // 协程退出
 			return
 		}
 	}
@@ -679,6 +688,11 @@ func (n *NSQD) queueScanWorker(workCh chan *Channel, responseCh chan bool, close
 //
 // If QueueScanDirtyPercent (default: 25%) of the selected channels were dirty,
 // the loop continues without sleep.
+// queueScanLoop在单个goroutine中运行，以处理动态队列和延迟优先级队列。
+// 它管理一个并发处理通道的queueScanWorker池(可配置的QueueScanWorkerPoolMax的最大值(默认值:4))。
+// 它复制Redis的概率过期算法:它唤醒每个QueueScanInterval(默认:100ms)从本地缓存列表中选择一个随机的QueueScanSelectionCount(默认:20)通道(刷新每个QueueScanRefreshInterval(默认:5s))。
+// 如果其中一个队列有工作要做，则认为通道是“脏的”。
+// 如果所选通道的QueueScanDirtyPercent(默认值:25%)是dirty，则循环将继续而不休眠。
 func (n *NSQD) queueScanLoop() {
 	workCh := make(chan *Channel, n.getOpts().QueueScanSelectionCount)
 	responseCh := make(chan bool, n.getOpts().QueueScanSelectionCount)
@@ -687,40 +701,45 @@ func (n *NSQD) queueScanLoop() {
 	workTicker := time.NewTicker(n.getOpts().QueueScanInterval)
 	refreshTicker := time.NewTicker(n.getOpts().QueueScanRefreshInterval)
 
+	// 获取所有channel
 	channels := n.channels()
+	// 初始化工作协程
 	n.resizePool(len(channels), workCh, responseCh, closeCh)
 
 	for {
 		select {
-		case <-workTicker.C:
+		case <-workTicker.C: // 定时进行扫描
 			if len(channels) == 0 {
 				continue
 			}
-		case <-refreshTicker.C:
+		case <-refreshTicker.C: // 定时重置工作协程数量
 			channels = n.channels()
 			n.resizePool(len(channels), workCh, responseCh, closeCh)
 			continue
-		case <-n.exitChan:
+		case <-n.exitChan: // 退出
 			goto exit
 		}
 
+		// 需要扫描的channel数量
 		num := n.getOpts().QueueScanSelectionCount
 		if num > len(channels) {
 			num = len(channels)
 		}
 
 	loop:
+		// 随机选出num个channel写入workCh
 		for _, i := range util.UniqRands(num, len(channels)) {
 			workCh <- channels[i]
 		}
 
 		numDirty := 0
 		for i := 0; i < num; i++ {
-			if <-responseCh {
+			if <-responseCh { // for循环控制次数 不会一直阻塞
 				numDirty++
 			}
 		}
 
+		// 校验成功的百分比，dirty比例太高重试
 		if float64(numDirty)/float64(num) > n.getOpts().QueueScanDirtyPercent {
 			goto loop
 		}

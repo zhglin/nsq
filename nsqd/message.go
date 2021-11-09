@@ -22,10 +22,10 @@ type Message struct {
 	Attempts  uint16
 
 	// for in-flight handling
-	deliveryTS time.Time
-	clientID   int64
-	pri        int64
-	index      int
+	deliveryTS time.Time     // 发送的当前时间
+	clientID   int64         // 发送给的客户端标识
+	pri        int64         // 超时时间绝对时间
+	index      int           // 在inFlightPqueue中的下标
 	deferred   time.Duration // 延迟消息
 }
 
@@ -38,6 +38,7 @@ func NewMessage(id MessageID, body []byte) *Message {
 	}
 }
 
+// WriteTo 消息编码
 func (m *Message) WriteTo(w io.Writer) (int64, error) {
 	var buf [10]byte
 	var total int64
@@ -45,19 +46,19 @@ func (m *Message) WriteTo(w io.Writer) (int64, error) {
 	binary.BigEndian.PutUint64(buf[:8], uint64(m.Timestamp))
 	binary.BigEndian.PutUint16(buf[8:10], uint16(m.Attempts))
 
-	n, err := w.Write(buf[:])
+	n, err := w.Write(buf[:]) // 写入timestamp,attempts
 	total += int64(n)
 	if err != nil {
 		return total, err
 	}
 
-	n, err = w.Write(m.ID[:])
+	n, err = w.Write(m.ID[:]) // 写入id
 	total += int64(n)
 	if err != nil {
 		return total, err
 	}
 
-	n, err = w.Write(m.Body)
+	n, err = w.Write(m.Body) // 写入body
 	total += int64(n)
 	if err != nil {
 		return total, err
@@ -92,12 +93,15 @@ func decodeMessage(b []byte) (*Message, error) {
 	return &msg, nil
 }
 
+// 写入消息到后端channel
 func writeMessageToBackend(msg *Message, bq BackendQueue) error {
 	buf := bufferPoolGet()
 	defer bufferPoolPut(buf)
+	// 消息写入buf
 	_, err := msg.WriteTo(buf)
 	if err != nil {
 		return err
 	}
+	// buf写入后端队列
 	return bq.Put(buf.Bytes())
 }

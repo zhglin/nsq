@@ -25,9 +25,9 @@ const (
 	frameTypeMessage  int32 = 2
 )
 
-var separatorBytes = []byte(" ") // 命令与参数的分隔符
-var heartbeatBytes = []byte("_heartbeat_")
-var okBytes = []byte("OK") // 通用的报文响应
+var separatorBytes = []byte(" ")           // 命令与参数的分隔符
+var heartbeatBytes = []byte("_heartbeat_") // 心跳检查报文
+var okBytes = []byte("OK")                 // 通用的报文响应
 
 // 协议处理
 type protocolV2 struct {
@@ -56,7 +56,7 @@ func (p *protocolV2) IOLoop(c protocol.Client) error {
 	// 同步messagePump的启动，以确保它有机会初始化来自客户端属性的goroutine本地状态，
 	// 并避免与IDENTIFY(客户端可能已经更改或禁用了该属性)的潜在竞争
 	messagePumpStartedChan := make(chan bool)
-	go p.messagePump(client, messagePumpStartedChan)
+	go p.messagePump(client, messagePumpStartedChan) // 这里的退出没通知到client的关闭
 	<-messagePumpStartedChan
 
 	for {
@@ -122,6 +122,7 @@ func (p *protocolV2) IOLoop(c protocol.Client) error {
 		}
 	}
 
+	// 链接异常for并关闭client
 	p.nsqd.logf(LOG_INFO, "PROTOCOL(V2): [%s] exiting ioloop", client)
 	close(client.ExitChan)
 	if client.Channel != nil {
@@ -131,17 +132,20 @@ func (p *protocolV2) IOLoop(c protocol.Client) error {
 	return err
 }
 
+// SendMessage 向client发送消息
 func (p *protocolV2) SendMessage(client *clientV2, msg *Message) error {
 	p.nsqd.logf(LOG_DEBUG, "PROTOCOL(V2): writing msg(%s) to client(%s) - %s", msg.ID, client, msg.Body)
 
 	buf := bufferPoolGet()
 	defer bufferPoolPut(buf)
 
+	// 消息编码到buf
 	_, err := msg.WriteTo(buf)
 	if err != nil {
 		return err
 	}
 
+	// 写入client
 	err = p.Send(client, frameTypeMessage, buf.Bytes())
 	if err != nil {
 		return err
@@ -204,7 +208,7 @@ func (p *protocolV2) Exec(client *clientV2, params [][]byte) ([]byte, error) {
 		return p.NOP(client, params)
 	case bytes.Equal(params[0], []byte("TOUCH")): // 重置正在发送的消息的超时时间
 		return p.TOUCH(client, params)
-	case bytes.Equal(params[0], []byte("SUB")): // 订阅一个topic/channel
+	case bytes.Equal(params[0], []byte("SUB")): // 订阅一个topic/channel，一个client只能订阅一个channel
 		return p.SUB(client, params)
 	case bytes.Equal(params[0], []byte("CLS")): // 干净利落地关闭连接(不再发送消息)
 		return p.CLS(client, params)
@@ -214,23 +218,25 @@ func (p *protocolV2) Exec(client *clientV2, params [][]byte) ([]byte, error) {
 	return nil, protocol.NewFatalClientErr(nil, "E_INVALID", fmt.Sprintf("invalid command %s", params[0]))
 }
 
+// 为client写入消息
 func (p *protocolV2) messagePump(client *clientV2, startedChan chan bool) {
 	var err error
 	var memoryMsgChan chan *Message
 	var backendMsgChan <-chan []byte
-	var subChannel *Channel
+	var subChannel *Channel // 订阅的channel，从subEventChan取出的
 	// NOTE: `flusherChan` is used to bound message latency for
 	// the pathological case of a channel on a low volume topic
 	// with >1 clients having >1 RDY counts
-	var flusherChan <-chan time.Time
-	var sampleRate int32
+	// 注意:' flusherChan '用于绑定低容量主题上的通道病理情况的消息延迟，>1客户端具有>1 RDY计数
+	var flusherChan <-chan time.Time // 刷新缓冲区的通知
+	var sampleRate int32             // 发送速率
 
-	subEventChan := client.SubEventChan
-	identifyEventChan := client.IdentifyEventChan
+	subEventChan := client.SubEventChan           // 客户端订阅的channel
+	identifyEventChan := client.IdentifyEventChan // 客户端identify消息
 	outputBufferTicker := time.NewTicker(client.OutputBufferTimeout)
 	heartbeatTicker := time.NewTicker(client.HeartbeatInterval)
-	heartbeatChan := heartbeatTicker.C
-	msgTimeout := client.MsgTimeout
+	heartbeatChan := heartbeatTicker.C // 心跳检查事件
+	msgTimeout := client.MsgTimeout    // 消息超时时间
 
 	// v2 opportunistically buffers data to clients to reduce write system calls
 	// we force flush in two cases:
@@ -238,6 +244,12 @@ func (p *protocolV2) messagePump(client *clientV2, startedChan chan bool) {
 	//    2. we're buffered and the channel has nothing left to send us
 	//       (ie. we would block in this loop anyway)
 	//
+	// v2适当的缓冲数据到client，以减少写系统调用
+	// 我们在两种情况下强制flush:
+	// 1.当客户端没有准备好接收消息时
+	// 2我们被缓冲了，通道没有任何东西可以发送给我们
+	// ( ie。无论如何，我们都会在这个循环中阻塞)
+	// 从内存队列||后端队列写入client后，flushed设置为false
 	flushed := true
 
 	// signal to the goroutine that started the messagePump
@@ -246,12 +258,14 @@ func (p *protocolV2) messagePump(client *clientV2, startedChan chan bool) {
 	close(startedChan)
 
 	for {
+		// 没有订阅channel || 没有rdy报文
 		if subChannel == nil || !client.IsReadyForMessages() {
 			// the client is not ready to receive messages...
-			memoryMsgChan = nil
-			backendMsgChan = nil
+			// 客户端还没有准备好接收消息…
+			memoryMsgChan = nil  // 内存队列
+			backendMsgChan = nil // 后端队列
 			flusherChan = nil
-			// force flush
+			// force flush 强制刷新缓冲区数据写入client
 			client.writeLock.Lock()
 			err = client.Flush()
 			client.writeLock.Unlock()
@@ -259,13 +273,13 @@ func (p *protocolV2) messagePump(client *clientV2, startedChan chan bool) {
 				goto exit
 			}
 			flushed = true
-		} else if flushed {
+		} else if flushed { // 已经刷新了缓冲区
 			// last iteration we flushed...
 			// do not select on the flusher ticker channel
 			memoryMsgChan = subChannel.memoryMsgChan
 			backendMsgChan = subChannel.backend.ReadChan()
 			flusherChan = nil
-		} else {
+		} else { // 需要刷新缓冲区
 			// we're buffered (if there isn't any more data we should flush)...
 			// select on the flusher ticker channel, too
 			memoryMsgChan = subChannel.memoryMsgChan
@@ -274,10 +288,12 @@ func (p *protocolV2) messagePump(client *clientV2, startedChan chan bool) {
 		}
 
 		select {
-		case <-flusherChan:
+		case <-flusherChan: // 刷新写缓冲区
 			// if this case wins, we're either starved
 			// or we won the race between other channels...
 			// in either case, force flush
+			// 如果这个案子赢了，我们要么是饥肠辘辘，要么是赢得了其他渠道之间的竞争……
+			// 在这两种情况下，强制flush
 			client.writeLock.Lock()
 			err = client.Flush()
 			client.writeLock.Unlock()
@@ -285,19 +301,21 @@ func (p *protocolV2) messagePump(client *clientV2, startedChan chan bool) {
 				goto exit
 			}
 			flushed = true
-		case <-client.ReadyStateChan:
-		case subChannel = <-subEventChan:
-			// you can't SUB anymore
+		case <-client.ReadyStateChan: // 客户端RDY的通知
+		case subChannel = <-subEventChan: // 取出client订阅的channel
+			// you can't SUB anymore 一个client只能订阅一个channel
 			subEventChan = nil
-		case identifyData := <-identifyEventChan:
-			// you can't IDENTIFY anymore
+		case identifyData := <-identifyEventChan: // 客户端identify消息
+			// you can't IDENTIFY anymore 一个client只能有一条identify消息
 			identifyEventChan = nil
 
+			// 更新写缓冲的刷新时间间隔
 			outputBufferTicker.Stop()
 			if identifyData.OutputBufferTimeout > 0 {
 				outputBufferTicker = time.NewTicker(identifyData.OutputBufferTimeout)
 			}
 
+			// 更新心跳检查时间间隔
 			heartbeatTicker.Stop()
 			heartbeatChan = nil
 			if identifyData.HeartbeatInterval > 0 {
@@ -309,17 +327,20 @@ func (p *protocolV2) messagePump(client *clientV2, startedChan chan bool) {
 				sampleRate = identifyData.SampleRate
 			}
 
+			// 消息超时时间
 			msgTimeout = identifyData.MsgTimeout
-		case <-heartbeatChan:
+		case <-heartbeatChan: // 发送心跳报文
 			err = p.Send(client, frameTypeResponse, heartbeatBytes)
 			if err != nil {
 				goto exit
 			}
-		case b := <-backendMsgChan:
+		case b := <-backendMsgChan: // 后端队列获取消息
+			// 随机丢弃消息
 			if sampleRate > 0 && rand.Int31n(100) > sampleRate {
 				continue
 			}
 
+			// 解析磁盘文件中的消息
 			msg, err := decodeMessage(b)
 			if err != nil {
 				p.nsqd.logf(LOG_ERROR, "failed to decode message - %s", err)
@@ -327,14 +348,18 @@ func (p *protocolV2) messagePump(client *clientV2, startedChan chan bool) {
 			}
 			msg.Attempts++
 
+			// inFlight记录
 			subChannel.StartInFlightTimeout(msg, client.ID, msgTimeout)
+			// 统计计数
 			client.SendingMessage()
+			// 发送到client
 			err = p.SendMessage(client, msg)
 			if err != nil {
 				goto exit
 			}
-			flushed = false
-		case msg := <-memoryMsgChan:
+			flushed = false // 需要刷新缓冲区
+		case msg := <-memoryMsgChan: // 内存队列获取消息
+			// 随机丢弃消息
 			if sampleRate > 0 && rand.Int31n(100) > sampleRate {
 				continue
 			}
@@ -346,13 +371,13 @@ func (p *protocolV2) messagePump(client *clientV2, startedChan chan bool) {
 			if err != nil {
 				goto exit
 			}
-			flushed = false
+			flushed = false // 需要刷新缓冲区
 		case <-client.ExitChan:
 			goto exit
 		}
 	}
 
-exit:
+exit: // 异常退出client的写消息
 	p.nsqd.logf(LOG_INFO, "PROTOCOL(V2): [%s] exiting messagePump", client)
 	heartbeatTicker.Stop()
 	outputBufferTicker.Stop()
@@ -667,7 +692,7 @@ func (p *protocolV2) SUB(client *clientV2, params [][]byte) ([]byte, error) {
 	for i := 1; ; i++ {
 		topic := p.nsqd.GetTopic(topicName)
 		channel = topic.GetChannel(channelName)
-		// 添加client之前channel已关闭直接报错
+		// 添加client之前channel已关闭 直接报错
 		if err := channel.AddClient(client.ID, client); err != nil {
 			return nil, protocol.NewFatalClientErr(err, "E_SUB_FAILED", "SUB failed "+err.Error())
 		}
@@ -742,17 +767,20 @@ func (p *protocolV2) FIN(client *clientV2, params [][]byte) ([]byte, error) {
 		return nil, protocol.NewFatalClientErr(nil, "E_INVALID", "FIN insufficient number of params")
 	}
 
+	// 获取消息id
 	id, err := getMessageID(params[1])
 	if err != nil {
 		return nil, protocol.NewFatalClientErr(nil, "E_INVALID", err.Error())
 	}
 
+	// 从inFlight中删除对应的消息
 	err = client.Channel.FinishMessage(client.ID, *id)
 	if err != nil {
 		return nil, protocol.NewClientErr(err, "E_FIN_FAILED",
 			fmt.Sprintf("FIN %s failed %s", *id, err.Error()))
 	}
 
+	// 统计计数
 	client.FinishedMessage()
 
 	return nil, nil
@@ -882,23 +910,28 @@ func (p *protocolV2) MPUB(client *clientV2, params [][]byte) ([]byte, error) {
 		return nil, protocol.NewFatalClientErr(nil, "E_INVALID", "MPUB insufficient number of parameters")
 	}
 
+	// 校验topicName
 	topicName := string(params[1])
 	if !protocol.IsValidTopicName(topicName) {
 		return nil, protocol.NewFatalClientErr(nil, "E_BAD_TOPIC",
 			fmt.Sprintf("E_BAD_TOPIC MPUB topic name %q is not valid", topicName))
 	}
 
+	// 身份验证
 	if err := p.CheckAuth(client, "MPUB", topicName, ""); err != nil {
 		return nil, err
 	}
 
+	// 获取topic
 	topic := p.nsqd.GetTopic(topicName)
 
+	// 读取报文长度
 	bodyLen, err := readLen(client.Reader, client.lenSlice)
 	if err != nil {
 		return nil, protocol.NewFatalClientErr(err, "E_BAD_BODY", "MPUB failed to read body size")
 	}
 
+	// 校验报文长度
 	if bodyLen <= 0 {
 		return nil, protocol.NewFatalClientErr(nil, "E_BAD_BODY",
 			fmt.Sprintf("MPUB invalid body size %d", bodyLen))
@@ -909,6 +942,7 @@ func (p *protocolV2) MPUB(client *clientV2, params [][]byte) ([]byte, error) {
 			fmt.Sprintf("MPUB body too big %d > %d", bodyLen, p.nsqd.getOpts().MaxBodySize))
 	}
 
+	// 读取消息内容
 	messages, err := readMPUB(client.Reader, client.lenSlice, topic,
 		p.nsqd.getOpts().MaxMsgSize, p.nsqd.getOpts().MaxBodySize)
 	if err != nil {
@@ -918,11 +952,13 @@ func (p *protocolV2) MPUB(client *clientV2, params [][]byte) ([]byte, error) {
 	// if we've made it this far we've validated all the input,
 	// the only possible error is that the topic is exiting during
 	// this next call (and no messages will be queued in that case)
+	// 如果我们到此为止，我们已经验证了所有的输入，唯一可能的错误是主题在下一次调用期间退出(并且在这种情况下没有消息将排队)
 	err = topic.PutMessages(messages)
 	if err != nil {
 		return nil, protocol.NewFatalClientErr(err, "E_MPUB_FAILED", "MPUB failed "+err.Error())
 	}
 
+	// 数据统计
 	client.PublishedMessage(topicName, uint64(len(messages)))
 
 	return okBytes, nil
@@ -1019,13 +1055,17 @@ func (p *protocolV2) TOUCH(client *clientV2, params [][]byte) ([]byte, error) {
 	return nil, nil
 }
 
+// 读取批量消息 消息总数量+(单个消息长度+单个消息内容)...
 func readMPUB(r io.Reader, tmp []byte, topic *Topic, maxMessageSize int64, maxBodySize int64) ([]*Message, error) {
+	// 读四个字节的消息数量
 	numMessages, err := readLen(r, tmp)
 	if err != nil {
 		return nil, protocol.NewFatalClientErr(err, "E_BAD_BODY", "MPUB failed to read message count")
 	}
 
 	// 4 == total num, 5 == length + min 1
+	// (maxBodySize - 4(四个字节的消息数量)) / 5 (四个字节消息长度+一个字节的消息内容)
+	// 消息内容是1字节时的最大消息数量
 	maxMessages := (maxBodySize - 4) / 5
 	if numMessages <= 0 || int64(numMessages) > maxMessages {
 		return nil, protocol.NewFatalClientErr(err, "E_BAD_BODY",
@@ -1034,7 +1074,7 @@ func readMPUB(r io.Reader, tmp []byte, topic *Topic, maxMessageSize int64, maxBo
 
 	messages := make([]*Message, 0, numMessages)
 	for i := int32(0); i < numMessages; i++ {
-		messageSize, err := readLen(r, tmp)
+		messageSize, err := readLen(r, tmp) // 读取单个消息的长度
 		if err != nil {
 			return nil, protocol.NewFatalClientErr(err, "E_BAD_MESSAGE",
 				fmt.Sprintf("MPUB failed to read message(%d) body size", i))
@@ -1045,13 +1085,13 @@ func readMPUB(r io.Reader, tmp []byte, topic *Topic, maxMessageSize int64, maxBo
 				fmt.Sprintf("MPUB invalid message(%d) body size %d", i, messageSize))
 		}
 
-		if int64(messageSize) > maxMessageSize {
+		if int64(messageSize) > maxMessageSize { // 单个消息超过最大值
 			return nil, protocol.NewFatalClientErr(nil, "E_BAD_MESSAGE",
 				fmt.Sprintf("MPUB message too big %d > %d", messageSize, maxMessageSize))
 		}
 
 		msgBody := make([]byte, messageSize)
-		_, err = io.ReadFull(r, msgBody)
+		_, err = io.ReadFull(r, msgBody) // 读取消息内容
 		if err != nil {
 			return nil, protocol.NewFatalClientErr(err, "E_BAD_MESSAGE", "MPUB failed to read message body")
 		}

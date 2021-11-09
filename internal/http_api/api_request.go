@@ -53,6 +53,7 @@ func NewClient(tlsConfig *tls.Config, connectTimeout time.Duration, requestTimeo
 
 // GETV1 is a helper function to perform a V1 HTTP request
 // and parse our NSQ daemon's expected response format, with deadlines.
+// 是一个helper函数，用于执行一个V1 HTTP请求并解析NSQ守护进程的预期响应格式，带有截止日期。
 func (c *Client) GETV1(endpoint string, v interface{}) error {
 retry:
 	req, err := http.NewRequest("GET", endpoint, nil)

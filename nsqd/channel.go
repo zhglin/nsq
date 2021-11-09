@@ -38,17 +38,17 @@ type Channel struct {
 	// 64bit atomic vars need to be first for proper alignment on 32bit platforms
 	requeueCount uint64
 	messageCount uint64 // 写入此channel的消息数量
-	timeoutCount uint64
+	timeoutCount uint64 // 超时消息数量
 
 	sync.RWMutex
 
-	topicName string
-	name      string
+	topicName string // topic名称
+	name      string // channel名称
 	nsqd      *NSQD
 
-	backend BackendQueue
+	backend BackendQueue // 后端队列
 
-	memoryMsgChan chan *Message
+	memoryMsgChan chan *Message // 内存队列
 	exitFlag      int32
 	exitMutex     sync.RWMutex
 
@@ -66,9 +66,9 @@ type Channel struct {
 	deferredMessages map[MessageID]*pqueue.Item
 	deferredPQ       pqueue.PriorityQueue
 	deferredMutex    sync.Mutex
-	inFlightMessages map[MessageID]*Message
-	inFlightPQ       inFlightPqueue
-	inFlightMutex    sync.Mutex
+	inFlightMessages map[MessageID]*Message // 飞行中的消息 消息id=>消息 一个channel的消息分给多个client消费
+	inFlightPQ       inFlightPqueue         // 飞行中的消息 优先级队列
+	inFlightMutex    sync.Mutex             // 飞行中的消息 添加优先级队列的互斥锁
 }
 
 // NewChannel creates a new instance of the Channel type and returns a pointer
@@ -85,6 +85,7 @@ func NewChannel(topicName string, channelName string, nsqd *NSQD,
 		nsqd:           nsqd,
 	}
 	// create mem-queue only if size > 0 (do not use unbuffered chan)
+	// 仅当大小为> 0时创建mem-queue(不要使用未缓冲的chan)
 	if nsqd.getOpts().MemQueueSize > 0 {
 		c.memoryMsgChan = make(chan *Message, nsqd.getOpts().MemQueueSize)
 	}
@@ -97,6 +98,7 @@ func NewChannel(topicName string, channelName string, nsqd *NSQD,
 
 	c.initPQ()
 
+	// 临时队列对应不同的后端队列实现
 	if strings.HasSuffix(channelName, "#ephemeral") {
 		c.ephemeral = true
 		c.backend = newDummyBackendQueue()
@@ -119,6 +121,7 @@ func NewChannel(topicName string, channelName string, nsqd *NSQD,
 		)
 	}
 
+	// 通知nsqd持久化
 	c.nsqd.Notify(c, !c.ephemeral)
 
 	return c
@@ -127,9 +130,10 @@ func NewChannel(topicName string, channelName string, nsqd *NSQD,
 func (c *Channel) initPQ() {
 	pqSize := int(math.Max(1, float64(c.nsqd.getOpts().MemQueueSize)/10))
 
+	// 飞行中的消息信息
 	c.inFlightMutex.Lock()
 	c.inFlightMessages = make(map[MessageID]*Message)
-	c.inFlightPQ = newInFlightPqueue(pqSize)
+	c.inFlightPQ = newInFlightPqueue(pqSize) // 优先级队列
 	c.inFlightMutex.Unlock()
 
 	c.deferredMutex.Lock()
@@ -298,6 +302,7 @@ func (c *Channel) PutMessage(m *Message) error {
 	if c.Exiting() {
 		return errors.New("exiting")
 	}
+	// 写入
 	err := c.put(m)
 	if err != nil {
 		return err
@@ -306,12 +311,13 @@ func (c *Channel) PutMessage(m *Message) error {
 	return nil
 }
 
+// 写入消息到channel
 func (c *Channel) put(m *Message) error {
 	select {
-	case c.memoryMsgChan <- m:
+	case c.memoryMsgChan <- m: // 内存队列写不进去就写入后端队列
 	default:
 		err := writeMessageToBackend(m, c.backend)
-		c.nsqd.SetHealth(err)
+		c.nsqd.SetHealth(err) // 在nsqd中记录err
 		if err != nil {
 			c.nsqd.logf(LOG_ERROR, "CHANNEL(%s): failed to write message to backend - %s",
 				c.name, err)
@@ -352,11 +358,15 @@ func (c *Channel) TouchMessage(clientID int64, id MessageID, clientMsgTimeout ti
 }
 
 // FinishMessage successfully discards an in-flight message
+// 成功丢弃一个飞行中的消息 客户端已FIN
 func (c *Channel) FinishMessage(clientID int64, id MessageID) error {
+	// 根据消息id获取消息
 	msg, err := c.popInFlightMessage(clientID, id)
 	if err != nil {
 		return err
 	}
+
+	// 从优先级队列删除消息
 	c.removeFromInFlightPQ(msg)
 	if c.e2eProcessingLatencyStream != nil {
 		c.e2eProcessingLatencyStream.Insert(msg.Timestamp)
@@ -456,12 +466,13 @@ func (c *Channel) RemoveClient(clientID int64) {
 	}
 }
 
+// StartInFlightTimeout 发送给客户端
 func (c *Channel) StartInFlightTimeout(msg *Message, clientID int64, timeout time.Duration) error {
 	now := time.Now()
 	msg.clientID = clientID
 	msg.deliveryTS = now
 	msg.pri = now.Add(timeout).UnixNano()
-	err := c.pushInFlightMessage(msg)
+	err := c.pushInFlightMessage(msg) // 添加到记录中
 	if err != nil {
 		return err
 	}
@@ -469,7 +480,7 @@ func (c *Channel) StartInFlightTimeout(msg *Message, clientID int64, timeout tim
 	return nil
 }
 
-// 延迟队列
+// StartDeferredTimeout 延迟队列
 func (c *Channel) StartDeferredTimeout(msg *Message, timeout time.Duration) error {
 	absTs := time.Now().Add(timeout).UnixNano()
 	item := &pqueue.Item{Value: msg, Priority: absTs}
@@ -482,6 +493,7 @@ func (c *Channel) StartDeferredTimeout(msg *Message, timeout time.Duration) erro
 }
 
 // pushInFlightMessage atomically adds a message to the in-flight dictionary
+// 以原子方式将消息添加到飞行中的字典中
 func (c *Channel) pushInFlightMessage(msg *Message) error {
 	c.inFlightMutex.Lock()
 	_, ok := c.inFlightMessages[msg.ID]
@@ -495,6 +507,7 @@ func (c *Channel) pushInFlightMessage(msg *Message) error {
 }
 
 // popInFlightMessage atomically removes a message from the in-flight dictionary
+// 以原子方式从正在运行的字典中删除一条消息并返回
 func (c *Channel) popInFlightMessage(clientID int64, id MessageID) (*Message, error) {
 	c.inFlightMutex.Lock()
 	msg, ok := c.inFlightMessages[id]
@@ -511,16 +524,19 @@ func (c *Channel) popInFlightMessage(clientID int64, id MessageID) (*Message, er
 	return msg, nil
 }
 
+// 添加到inFlightPQ优先级队列
 func (c *Channel) addToInFlightPQ(msg *Message) {
 	c.inFlightMutex.Lock()
 	c.inFlightPQ.Push(msg)
 	c.inFlightMutex.Unlock()
 }
 
+// 从优先级队列中删除
 func (c *Channel) removeFromInFlightPQ(msg *Message) {
 	c.inFlightMutex.Lock()
 	if msg.index == -1 {
 		// this item has already been popped off the pqueue
+		// 这个项目已经从pqueue中弹出
 		c.inFlightMutex.Unlock()
 		return
 	}
@@ -592,6 +608,7 @@ exit:
 	return dirty
 }
 
+// InFlight中超时未FIN的消息处理 返回是否具有超时的消息
 func (c *Channel) processInFlightQueue(t int64) bool {
 	c.exitMutex.RLock()
 	defer c.exitMutex.RUnlock()
@@ -602,6 +619,7 @@ func (c *Channel) processInFlightQueue(t int64) bool {
 
 	dirty := false
 	for {
+		// 小于当前时间的消息堆顶元素 超时的消息
 		c.inFlightMutex.Lock()
 		msg, _ := c.inFlightPQ.PeekAndShift(t)
 		c.inFlightMutex.Unlock()
@@ -611,6 +629,7 @@ func (c *Channel) processInFlightQueue(t int64) bool {
 		}
 		dirty = true
 
+		// 删掉记录
 		_, err := c.popInFlightMessage(msg.clientID, msg.ID)
 		if err != nil {
 			goto exit
@@ -619,9 +638,11 @@ func (c *Channel) processInFlightQueue(t int64) bool {
 		c.RLock()
 		client, ok := c.clients[msg.clientID]
 		c.RUnlock()
+		// 发送超时消息
 		if ok {
 			client.TimedOutMessage()
 		}
+		// 重新放入队列
 		c.put(msg)
 	}
 

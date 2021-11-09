@@ -4,11 +4,13 @@ import (
 	"math/rand"
 )
 
+// UniqRands 从maxVal中随机选出quantity个元素
 func UniqRands(quantity int, maxval int) []int {
 	if maxval < quantity {
 		quantity = maxval
 	}
 
+	// 构建数组
 	intSlice := make([]int, maxval)
 	for i := 0; i < maxval; i++ {
 		intSlice[i] = i

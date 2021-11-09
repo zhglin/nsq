@@ -38,7 +38,7 @@ func newHTTPServer(l *NSQLookupd) *httpServer {
 	router.Handle("GET", "/debug", http_api.Decorate(s.doDebug, log, http_api.V1))
 	router.Handle("GET", "/lookup", http_api.Decorate(s.doLookup, log, http_api.V1))
 	router.Handle("GET", "/topics", http_api.Decorate(s.doTopics, log, http_api.V1))
-	router.Handle("GET", "/channels", http_api.Decorate(s.doChannels, log, http_api.V1))
+	router.Handle("GET", "/channels", http_api.Decorate(s.doChannels, log, http_api.V1)) // 获取topic下的所有channel名称
 	router.Handle("GET", "/nodes", http_api.Decorate(s.doNodes, log, http_api.V1))
 
 	// only v1
@@ -87,16 +87,19 @@ func (s *httpServer) doTopics(w http.ResponseWriter, req *http.Request, ps httpr
 }
 
 func (s *httpServer) doChannels(w http.ResponseWriter, req *http.Request, ps httprouter.Params) (interface{}, error) {
+	// 解析请求参数
 	reqParams, err := http_api.NewReqParams(req)
 	if err != nil {
 		return nil, http_api.Err{400, "INVALID_REQUEST"}
 	}
 
+	// 获取topic参数名
 	topicName, err := reqParams.Get("topic")
 	if err != nil {
 		return nil, http_api.Err{400, "MISSING_ARG_TOPIC"}
 	}
 
+	// 返回topic下的channel
 	channels := s.nsqlookupd.DB.FindRegistrations("channel", topicName, "*").SubKeys()
 	return map[string]interface{}{
 		"channels": channels,

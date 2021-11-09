@@ -17,12 +17,13 @@ import (
 
 const defaultBufferSize = 16 * 1024 // 缓冲区大小
 
+// 此客户端链接的状态
 const (
-	stateInit = iota // 已初始化
-	stateDisconnected
-	stateConnected
-	stateSubscribed // 已订阅
-	stateClosing
+	stateInit         = iota // 已初始化
+	stateDisconnected        // 已关闭链接 lookupd
+	stateConnected           // 已建立链接 lookupd
+	stateSubscribed          // 已订阅
+	stateClosing             // 已关闭
 )
 
 // 客户端标识信息
@@ -125,13 +126,13 @@ func (s ClientV2Stats) String() string {
 type clientV2 struct {
 	// 64bit atomic vars need to be first for proper alignment on 32bit platforms
 	// 64位原子变量需要首先在32位平台上正确对齐
-	ReadyCount    int64 // 准备接收的消息数量
-	InFlightCount int64
-	MessageCount  uint64
-	FinishCount   uint64
+	ReadyCount    int64  // 准备接收的消息数量
+	InFlightCount int64  // 飞行中消息数量
+	MessageCount  uint64 // 发送的消息数量
+	FinishCount   uint64 // FIN完成的消息数
 	RequeueCount  uint64
 
-	pubCounts map[string]uint64
+	pubCounts map[string]uint64 // 数据统计 topicName=>写入的消息数
 
 	writeLock sync.RWMutex
 	metaLock  sync.RWMutex
@@ -151,26 +152,26 @@ type clientV2 struct {
 	Reader *bufio.Reader // 读缓冲
 	Writer *bufio.Writer // 写缓冲
 
-	OutputBufferSize    int
-	OutputBufferTimeout time.Duration
+	OutputBufferSize    int           // 全局默认，Identify报文可改, 写缓冲区大小
+	OutputBufferTimeout time.Duration // 全局默认，Identify报文可改, 刷新写缓冲区的时间间隔
 
-	HeartbeatInterval time.Duration // 心跳检查间隔时间
+	HeartbeatInterval time.Duration // 全局默认，Identify报文可改，心跳检查间隔时间
 
-	MsgTimeout time.Duration
+	MsgTimeout time.Duration // 全局默认，Identify报文可改，消息超时时间
 
 	State          int32     // 链接状态
 	ConnectTime    time.Time // 接收到链接的当前时间
 	Channel        *Channel  // 订阅的channel
-	ReadyStateChan chan int  // 准备接收消息数量的变更
+	ReadyStateChan chan int  // 准备接收消息数量的变更通知
 	ExitChan       chan int
 
 	ClientID string // 客户端标识 ip identify报文
 	Hostname string // 客户端标识 ip	Identify报文
 
-	SampleRate int32 // 采样率
+	SampleRate int32 // 全局默认，Identify报文可改，采样率 随机丢弃消息
 
-	IdentifyEventChan chan identifyEvent
-	SubEventChan      chan *Channel // 已订阅的channel
+	IdentifyEventChan chan identifyEvent // 客户端identify报文上传的信息
+	SubEventChan      chan *Channel      // 已订阅的channel
 
 	TLS     int32 // 是否是TLS链接
 	Snappy  int32 // 是否进行Snappy报文压缩 1是
@@ -399,12 +400,13 @@ func (p *prettyConnectionState) GetVersion() string {
 	}
 }
 
+// IsReadyForMessages 客户端是否准备就绪 接收消息
 func (c *clientV2) IsReadyForMessages() bool {
 	if c.Channel.IsPaused() {
 		return false
 	}
 
-	readyCount := atomic.LoadInt64(&c.ReadyCount)
+	readyCount := atomic.LoadInt64(&c.ReadyCount) // RDY请求
 	inFlightCount := atomic.LoadInt64(&c.InFlightCount)
 
 	c.nsqd.logf(LOG_DEBUG, "[%s] state rdy: %4d inflt: %4d", c, readyCount, inFlightCount)
@@ -437,6 +439,7 @@ func (c *clientV2) tryUpdateReadyState() {
 	}
 }
 
+// FinishedMessage 统计计数
 func (c *clientV2) FinishedMessage() {
 	atomic.AddUint64(&c.FinishCount, 1)
 	atomic.AddInt64(&c.InFlightCount, -1)
@@ -448,17 +451,20 @@ func (c *clientV2) Empty() {
 	c.tryUpdateReadyState()
 }
 
+// SendingMessage 统计计数
 func (c *clientV2) SendingMessage() {
 	atomic.AddInt64(&c.InFlightCount, 1)
 	atomic.AddUint64(&c.MessageCount, 1)
 }
 
+// PublishedMessage 记录写入的消息数量
 func (c *clientV2) PublishedMessage(topic string, count uint64) {
 	c.metaLock.Lock()
 	c.pubCounts[topic] += count
 	c.metaLock.Unlock()
 }
 
+// TimedOutMessage 超时消息回调
 func (c *clientV2) TimedOutMessage() {
 	atomic.AddInt64(&c.InFlightCount, -1)
 	c.tryUpdateReadyState()
@@ -548,6 +554,7 @@ func (c *clientV2) SetOutputBuffer(desiredSize int, desiredTimeout int) error {
 	return nil
 }
 
+// SetSampleRate 设置采样率
 func (c *clientV2) SetSampleRate(sampleRate int32) error {
 	if sampleRate < 0 || sampleRate > 99 {
 		return fmt.Errorf("sample rate (%d) is invalid", sampleRate)

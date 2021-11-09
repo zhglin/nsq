@@ -217,6 +217,7 @@ func (rr Registrations) Keys() []string {
 	return keys
 }
 
+// SubKeys 获取subkeys即channel
 func (rr Registrations) SubKeys() []string {
 	subkeys := make([]string, len(rr))
 	for i, k := range rr {
