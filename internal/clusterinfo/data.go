@@ -173,7 +173,7 @@ func (c *ClusterInfo) GetLookupdTopicChannels(topic string, lookupdHTTPAddrs []s
 }
 
 // GetLookupdProducers returns Producers of all the nsqd connected to the given lookupds
-// 返回连接到给定查找的所有nsqd的生产者
+// 返回连接到lookupd的所有nsqd的生产者
 func (c *ClusterInfo) GetLookupdProducers(lookupdHTTPAddrs []string) (Producers, error) {
 	var producers []*Producer
 	var lock sync.Mutex
@@ -244,6 +244,7 @@ func (c *ClusterInfo) GetLookupdProducers(lookupdHTTPAddrs []string) (Producers,
 
 // GetLookupdTopicProducers returns Producers of all the nsqd for a given topic by
 // unioning the nodes returned from the given lookupd
+// 通过合并从给定的lookupd返回的节点，返回给定topic的所有nsqd的生产者
 func (c *ClusterInfo) GetLookupdTopicProducers(topic string, lookupdHTTPAddrs []string) (Producers, error) {
 	var producers Producers
 	var lock sync.Mutex
@@ -296,6 +297,7 @@ func (c *ClusterInfo) GetLookupdTopicProducers(topic string, lookupdHTTPAddrs []
 }
 
 // GetNSQDTopics returns a []string containing all the topics produced by the given nsqd
+// 返回一个[]字符串，其中包含由给定NSQD生成的所有主题
 func (c *ClusterInfo) GetNSQDTopics(nsqdHTTPAddrs []string) ([]string, error) {
 	var topics []string
 	var lock sync.Mutex

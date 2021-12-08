@@ -25,7 +25,7 @@ type Topic struct {
 	backend           BackendQueue        // 后端队列
 	memoryMsgChan     chan *Message       // 内存队列
 	startChan         chan int            // topic启动完成的标记通知
-	exitChan          chan int            // topic退出 不在从把topic消息写入channel
+	exitChan          chan int            // topic退出 不再把topic消息写入channel
 	channelUpdateChan chan int            // channel变更的通知 (新建 删除)
 	waitGroup         util.WaitGroupWrapper
 	exitFlag          int32        // 当前topic是否已退出的标记
@@ -146,6 +146,7 @@ func (t *Topic) getOrCreateChannel(channelName string) (*Channel, bool) {
 	return channel, false
 }
 
+// GetExistingChannel 获取指定的channel，不存在返回error
 func (t *Topic) GetExistingChannel(channelName string) (*Channel, error) {
 	t.RLock()
 	defer t.RUnlock()
@@ -157,7 +158,7 @@ func (t *Topic) GetExistingChannel(channelName string) (*Channel, error) {
 }
 
 // DeleteExistingChannel removes a channel from the topic only if it exists
-// 仅在通道存在时从主题中删除该通道
+// 仅在channel存在时从主题中删除该channel
 func (t *Topic) DeleteExistingChannel(channelName string) error {
 	t.RLock()
 	channel, ok := t.channelMap[channelName]
@@ -190,6 +191,7 @@ func (t *Topic) DeleteExistingChannel(channelName string) error {
 	case <-t.exitChan:
 	}
 
+	// 临时topic不存在channel 直接删除topic
 	if numChannels == 0 && t.ephemeral == true {
 		go t.deleter.Do(func() { t.deleteCallback(t) })
 	}
@@ -329,7 +331,7 @@ func (t *Topic) messagePump() {
 				backendChan = t.backend.ReadChan()
 			}
 			continue
-		case <-t.pauseChan:
+		case <-t.pauseChan: // topic是否暂停的通知
 			if len(chans) == 0 || t.IsPaused() {
 				memoryMsgChan = nil
 				backendChan = nil
@@ -348,14 +350,14 @@ func (t *Topic) messagePump() {
 			// needs a unique instance but...
 			// fastpath to avoid copy if its the first channel
 			// (the topic already created the first copy)
-			// 复制消息，因为每个通道需要一个唯一的实例
+			// 复制消息，因为每个通道需要一个唯一的实例，> 0可以少复制一次
 			if i > 0 {
 				chanMsg = NewMessage(msg.ID, msg.Body)
 				chanMsg.Timestamp = msg.Timestamp
 				chanMsg.deferred = msg.deferred
 			}
 
-			// 延迟消息
+			// 延迟消息 topic写入到channel的内存中，然后定时写入到channel持久化
 			if chanMsg.deferred != 0 {
 				channel.PutMessageDeferred(chanMsg, chanMsg.deferred)
 				continue
@@ -376,16 +378,18 @@ exit:
 }
 
 // Delete empties the topic and all its channels and closes
-// 清空主题及其所有通道并关闭
+// 清空主题及其所有通道并删除
 func (t *Topic) Delete() error {
 	return t.exit(true)
 }
 
 // Close persists all outstanding topic data and closes all its channels
+// 清空主题及其所有通道并关闭
 func (t *Topic) Close() error {
 	return t.exit(false)
 }
 
+// topic退出
 func (t *Topic) exit(deleted bool) error {
 	if !atomic.CompareAndSwapInt32(&t.exitFlag, 0, 1) {
 		return errors.New("exiting")
@@ -404,8 +408,10 @@ func (t *Topic) exit(deleted bool) error {
 	close(t.exitChan)
 
 	// synchronize the close of messagePump()
+	// 同步关闭messagePump()
 	t.waitGroup.Wait()
 
+	// 删除
 	if deleted {
 		t.Lock()
 		for _, channel := range t.channelMap {
@@ -415,6 +421,7 @@ func (t *Topic) exit(deleted bool) error {
 		t.Unlock()
 
 		// empty the queue (deletes the backend files, too)
+		// 清空队列(也删除后端文件)
 		t.Empty()
 		return t.backend.Delete()
 	}
@@ -435,6 +442,7 @@ func (t *Topic) exit(deleted bool) error {
 	return t.backend.Close()
 }
 
+// Empty 删除topic中消息
 func (t *Topic) Empty() error {
 	for {
 		select {

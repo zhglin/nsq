@@ -53,27 +53,27 @@ func newHTTPServer(nsqd *NSQD, tlsEnabled bool, tlsRequired bool) *httpServer {
 		router:      router,
 	}
 
-	router.Handle("GET", "/ping", http_api.Decorate(s.pingHandler, log, http_api.PlainText))
-	router.Handle("GET", "/info", http_api.Decorate(s.doInfo, log, http_api.V1))
+	router.Handle("GET", "/ping", http_api.Decorate(s.pingHandler, log, http_api.PlainText)) // nsqd健康检查
+	router.Handle("GET", "/info", http_api.Decorate(s.doInfo, log, http_api.V1))             // 节点信息
 
 	// v1 negotiate
-	router.Handle("POST", "/pub", http_api.Decorate(s.doPUB, http_api.V1))
-	router.Handle("POST", "/mpub", http_api.Decorate(s.doMPUB, http_api.V1))
-	router.Handle("GET", "/stats", http_api.Decorate(s.doStats, log, http_api.V1))
+	router.Handle("POST", "/pub", http_api.Decorate(s.doPUB, http_api.V1))         //发布单条消息
+	router.Handle("POST", "/mpub", http_api.Decorate(s.doMPUB, http_api.V1))       // 批量发布消息
+	router.Handle("GET", "/stats", http_api.Decorate(s.doStats, log, http_api.V1)) // 当前节点状态信息
 
 	// only v1
-	router.Handle("POST", "/topic/create", http_api.Decorate(s.doCreateTopic, log, http_api.V1))
-	router.Handle("POST", "/topic/delete", http_api.Decorate(s.doDeleteTopic, log, http_api.V1))
-	router.Handle("POST", "/topic/empty", http_api.Decorate(s.doEmptyTopic, log, http_api.V1))
-	router.Handle("POST", "/topic/pause", http_api.Decorate(s.doPauseTopic, log, http_api.V1))
-	router.Handle("POST", "/topic/unpause", http_api.Decorate(s.doPauseTopic, log, http_api.V1))
-	router.Handle("POST", "/channel/create", http_api.Decorate(s.doCreateChannel, log, http_api.V1))
-	router.Handle("POST", "/channel/delete", http_api.Decorate(s.doDeleteChannel, log, http_api.V1))
-	router.Handle("POST", "/channel/empty", http_api.Decorate(s.doEmptyChannel, log, http_api.V1))
-	router.Handle("POST", "/channel/pause", http_api.Decorate(s.doPauseChannel, log, http_api.V1))
-	router.Handle("POST", "/channel/unpause", http_api.Decorate(s.doPauseChannel, log, http_api.V1))
-	router.Handle("GET", "/config/:opt", http_api.Decorate(s.doConfig, log, http_api.V1))
-	router.Handle("PUT", "/config/:opt", http_api.Decorate(s.doConfig, log, http_api.V1))
+	router.Handle("POST", "/topic/create", http_api.Decorate(s.doCreateTopic, log, http_api.V1))     // 创建topic
+	router.Handle("POST", "/topic/delete", http_api.Decorate(s.doDeleteTopic, log, http_api.V1))     // 删除topic
+	router.Handle("POST", "/topic/empty", http_api.Decorate(s.doEmptyTopic, log, http_api.V1))       // 清空topic消息
+	router.Handle("POST", "/topic/pause", http_api.Decorate(s.doPauseTopic, log, http_api.V1))       // 暂停topic
+	router.Handle("POST", "/topic/unpause", http_api.Decorate(s.doPauseTopic, log, http_api.V1))     // 取消暂停topic
+	router.Handle("POST", "/channel/create", http_api.Decorate(s.doCreateChannel, log, http_api.V1)) // topic下创建channel
+	router.Handle("POST", "/channel/delete", http_api.Decorate(s.doDeleteChannel, log, http_api.V1)) // 删除topic下的channel
+	router.Handle("POST", "/channel/empty", http_api.Decorate(s.doEmptyChannel, log, http_api.V1))   // 清空topic下的指定channel的消息
+	router.Handle("POST", "/channel/pause", http_api.Decorate(s.doPauseChannel, log, http_api.V1))   // 暂停topic下的channel消息
+	router.Handle("POST", "/channel/unpause", http_api.Decorate(s.doPauseChannel, log, http_api.V1)) // 取消暂停topic下的channel消息
+	router.Handle("GET", "/config/:opt", http_api.Decorate(s.doConfig, log, http_api.V1))            // 获取配置
+	router.Handle("PUT", "/config/:opt", http_api.Decorate(s.doConfig, log, http_api.V1))            // 配置变更
 
 	// debug
 	router.HandlerFunc("GET", "/debug/pprof/", pprof.Index)
@@ -112,6 +112,7 @@ func (s *httpServer) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	s.router.ServeHTTP(w, req)
 }
 
+// 健康检查
 func (s *httpServer) pingHandler(w http.ResponseWriter, req *http.Request, ps httprouter.Params) (interface{}, error) {
 	health := s.nsqd.GetHealth()
 	if !s.nsqd.IsHealthy() {
@@ -120,6 +121,7 @@ func (s *httpServer) pingHandler(w http.ResponseWriter, req *http.Request, ps ht
 	return health, nil
 }
 
+// 当前nsqd的节点信息
 func (s *httpServer) doInfo(w http.ResponseWriter, req *http.Request, ps httprouter.Params) (interface{}, error) {
 	hostname, err := os.Hostname()
 	if err != nil {
@@ -142,6 +144,7 @@ func (s *httpServer) doInfo(w http.ResponseWriter, req *http.Request, ps httprou
 	}, nil
 }
 
+// 从请求中获取topic，channel
 func (s *httpServer) getExistingTopicFromQuery(req *http.Request) (*http_api.ReqParams, *Topic, string, error) {
 	reqParams, err := http_api.NewReqParams(req)
 	if err != nil {
@@ -162,6 +165,7 @@ func (s *httpServer) getExistingTopicFromQuery(req *http.Request) (*http_api.Req
 	return reqParams, topic, channelName, err
 }
 
+// 从请求中获取topic
 func (s *httpServer) getTopicFromQuery(req *http.Request) (url.Values, *Topic, error) {
 	reqParams, err := url.ParseQuery(req.URL.RawQuery)
 	if err != nil {
@@ -182,6 +186,7 @@ func (s *httpServer) getTopicFromQuery(req *http.Request) (url.Values, *Topic, e
 	return reqParams, s.nsqd.GetTopic(topicName), nil
 }
 
+// 将消息发布到主题
 func (s *httpServer) doPUB(w http.ResponseWriter, req *http.Request, ps httprouter.Params) (interface{}, error) {
 	// TODO: one day I'd really like to just error on chunked requests
 	// to be able to fail "too big" requests before we even read
@@ -192,6 +197,7 @@ func (s *httpServer) doPUB(w http.ResponseWriter, req *http.Request, ps httprout
 
 	// add 1 so that it's greater than our max when we test for it
 	// (LimitReader returns a "fake" EOF)
+	// 当我们测试它的时候，添加1使它大于我们的max (LimitReader返回一个“假的”EOF)
 	readMax := s.nsqd.getOpts().MaxMsgSize + 1
 	body, err := ioutil.ReadAll(io.LimitReader(req.Body, readMax))
 	if err != nil {
@@ -204,11 +210,13 @@ func (s *httpServer) doPUB(w http.ResponseWriter, req *http.Request, ps httprout
 		return nil, http_api.Err{400, "MSG_EMPTY"}
 	}
 
+	// 获取topic
 	reqParams, topic, err := s.getTopicFromQuery(req)
 	if err != nil {
 		return nil, err
 	}
 
+	// 延迟的时间
 	var deferred time.Duration
 	if ds, ok := reqParams["defer"]; ok {
 		var di int64
@@ -222,6 +230,7 @@ func (s *httpServer) doPUB(w http.ResponseWriter, req *http.Request, ps httprout
 		}
 	}
 
+	// message写入topic
 	msg := NewMessage(topic.GenerateID(), body)
 	msg.deferred = deferred
 	err = topic.PutMessage(msg)
@@ -232,6 +241,7 @@ func (s *httpServer) doPUB(w http.ResponseWriter, req *http.Request, ps httprout
 	return "OK", nil
 }
 
+// 写入批量消息
 func (s *httpServer) doMPUB(w http.ResponseWriter, req *http.Request, ps httprouter.Params) (interface{}, error) {
 	var msgs []*Message
 	var exit bool
@@ -249,6 +259,7 @@ func (s *httpServer) doMPUB(w http.ResponseWriter, req *http.Request, ps httprou
 	}
 
 	// text mode is default, but unrecognized binary opt considered true
+	// 文本模式是默认的，但不可识别的二进制选择为真
 	binaryMode := false
 	if vals, ok := reqParams["binary"]; ok {
 		if binaryMode, ok = boolParams[vals[0]]; !ok {
@@ -310,11 +321,13 @@ func (s *httpServer) doMPUB(w http.ResponseWriter, req *http.Request, ps httprou
 	return "OK", nil
 }
 
+// 创建topic
 func (s *httpServer) doCreateTopic(w http.ResponseWriter, req *http.Request, ps httprouter.Params) (interface{}, error) {
 	_, _, err := s.getTopicFromQuery(req)
 	return nil, err
 }
 
+// 清空topic中消息
 func (s *httpServer) doEmptyTopic(w http.ResponseWriter, req *http.Request, ps httprouter.Params) (interface{}, error) {
 	reqParams, err := http_api.NewReqParams(req)
 	if err != nil {
@@ -344,6 +357,7 @@ func (s *httpServer) doEmptyTopic(w http.ResponseWriter, req *http.Request, ps h
 	return nil, nil
 }
 
+// 删除topic
 func (s *httpServer) doDeleteTopic(w http.ResponseWriter, req *http.Request, ps httprouter.Params) (interface{}, error) {
 	reqParams, err := http_api.NewReqParams(req)
 	if err != nil {
@@ -364,6 +378,7 @@ func (s *httpServer) doDeleteTopic(w http.ResponseWriter, req *http.Request, ps 
 	return nil, nil
 }
 
+// 暂停topic消息
 func (s *httpServer) doPauseTopic(w http.ResponseWriter, req *http.Request, ps httprouter.Params) (interface{}, error) {
 	reqParams, err := http_api.NewReqParams(req)
 	if err != nil {
@@ -399,6 +414,7 @@ func (s *httpServer) doPauseTopic(w http.ResponseWriter, req *http.Request, ps h
 	return nil, nil
 }
 
+// topic下创建channel
 func (s *httpServer) doCreateChannel(w http.ResponseWriter, req *http.Request, ps httprouter.Params) (interface{}, error) {
 	_, topic, channelName, err := s.getExistingTopicFromQuery(req)
 	if err != nil {
@@ -408,6 +424,7 @@ func (s *httpServer) doCreateChannel(w http.ResponseWriter, req *http.Request, p
 	return nil, nil
 }
 
+// 清空topic下的指定channel的消息
 func (s *httpServer) doEmptyChannel(w http.ResponseWriter, req *http.Request, ps httprouter.Params) (interface{}, error) {
 	_, topic, channelName, err := s.getExistingTopicFromQuery(req)
 	if err != nil {
@@ -427,6 +444,7 @@ func (s *httpServer) doEmptyChannel(w http.ResponseWriter, req *http.Request, ps
 	return nil, nil
 }
 
+// 删除topic下的channel
 func (s *httpServer) doDeleteChannel(w http.ResponseWriter, req *http.Request, ps httprouter.Params) (interface{}, error) {
 	_, topic, channelName, err := s.getExistingTopicFromQuery(req)
 	if err != nil {
@@ -470,6 +488,7 @@ func (s *httpServer) doPauseChannel(w http.ResponseWriter, req *http.Request, ps
 	return nil, nil
 }
 
+// 当前节点的状态信息
 func (s *httpServer) doStats(w http.ResponseWriter, req *http.Request, ps httprouter.Params) (interface{}, error) {
 	reqParams, err := http_api.NewReqParams(req)
 	if err != nil {
@@ -493,9 +512,9 @@ func (s *httpServer) doStats(w http.ResponseWriter, req *http.Request, ps httpro
 	}
 
 	stats := s.nsqd.GetStats(topicName, channelName, includeClients)
-	health := s.nsqd.GetHealth()
-	startTime := s.nsqd.GetStartTime()
-	uptime := time.Since(startTime)
+	health := s.nsqd.GetHealth()       // 当前节点是否健康
+	startTime := s.nsqd.GetStartTime() // 开启时间
+	uptime := time.Since(startTime)    // 启动时长
 
 	var ms *memStats
 	if includeMem {
@@ -517,6 +536,7 @@ func (s *httpServer) doStats(w http.ResponseWriter, req *http.Request, ps httpro
 	}{version.Binary, health, startTime.Unix(), stats.Topics, ms, stats.Producers}, nil
 }
 
+// 字符串打印状态信息
 func (s *httpServer) printStats(stats Stats, ms *memStats, health string, startTime time.Time, uptime time.Duration) []byte {
 	var buf bytes.Buffer
 	w := &buf
@@ -597,6 +617,7 @@ func (s *httpServer) printStats(stats Stats, ms *memStats, health string, startT
 	return buf.Bytes()
 }
 
+// 配置变更nsqlookupd地址 log_level
 func (s *httpServer) doConfig(w http.ResponseWriter, req *http.Request, ps httprouter.Params) (interface{}, error) {
 	opt := ps.ByName("opt")
 

@@ -126,7 +126,7 @@ func (s ClientV2Stats) String() string {
 type clientV2 struct {
 	// 64bit atomic vars need to be first for proper alignment on 32bit platforms
 	// 64位原子变量需要首先在32位平台上正确对齐
-	ReadyCount    int64  // 准备接收的消息数量
+	ReadyCount    int64  // 准备接收的消息数量，inFlight消息超过此值暂停
 	InFlightCount int64  // 飞行中消息数量
 	MessageCount  uint64 // 发送的消息数量
 	FinishCount   uint64 // FIN完成的消息数
@@ -237,6 +237,7 @@ func (c *clientV2) String() string {
 	return c.RemoteAddr().String()
 }
 
+// Type 客户端类型
 func (c *clientV2) Type() int {
 	c.metaLock.RLock()
 	hasPublished := len(c.pubCounts) > 0
@@ -293,6 +294,7 @@ func (c *clientV2) Identify(data identifyDataV2) error {
 	return nil
 }
 
+// Stats 客户端链接状态
 func (c *clientV2) Stats(topicName string) ClientStats {
 	c.metaLock.RLock()
 	clientID := c.ClientID
@@ -402,6 +404,7 @@ func (p *prettyConnectionState) GetVersion() string {
 
 // IsReadyForMessages 客户端是否准备就绪 接收消息
 func (c *clientV2) IsReadyForMessages() bool {
+	// channel是否已暂停
 	if c.Channel.IsPaused() {
 		return false
 	}
@@ -411,6 +414,7 @@ func (c *clientV2) IsReadyForMessages() bool {
 
 	c.nsqd.logf(LOG_DEBUG, "[%s] state rdy: %4d inflt: %4d", c, readyCount, inFlightCount)
 
+	// inFlight消息的校验
 	if inFlightCount >= readyCount || readyCount <= 0 {
 		return false
 	}
@@ -446,6 +450,7 @@ func (c *clientV2) FinishedMessage() {
 	c.tryUpdateReadyState()
 }
 
+// Empty channel关闭时的回调
 func (c *clientV2) Empty() {
 	atomic.StoreInt64(&c.InFlightCount, 0)
 	c.tryUpdateReadyState()
@@ -476,17 +481,20 @@ func (c *clientV2) RequeuedMessage() {
 	c.tryUpdateReadyState()
 }
 
+// StartClose 关闭client
 func (c *clientV2) StartClose() {
-	// Force the client into ready 0
+	// Force the client into ready 0 修改客户端准备就绪的消息数
 	c.SetReadyCount(0)
-	// mark this client as closing
+	// mark this client as closing 将该客户端标记为关闭
 	atomic.StoreInt32(&c.State, stateClosing)
 }
 
+// Pause channel暂停的回调
 func (c *clientV2) Pause() {
 	c.tryUpdateReadyState()
 }
 
+// UnPause channel取消暂停的回调
 func (c *clientV2) UnPause() {
 	c.tryUpdateReadyState()
 }
@@ -554,7 +562,7 @@ func (c *clientV2) SetOutputBuffer(desiredSize int, desiredTimeout int) error {
 	return nil
 }
 
-// SetSampleRate 设置采样率
+// SetSampleRate 设置采样率 随机丢弃报文的比例
 func (c *clientV2) SetSampleRate(sampleRate int32) error {
 	if sampleRate < 0 || sampleRate > 99 {
 		return fmt.Errorf("sample rate (%d) is invalid", sampleRate)
@@ -622,6 +630,7 @@ func (c *clientV2) UpgradeDeflate(level int) error {
 	return nil
 }
 
+// UpgradeSnappy 读写报文升级成压缩报文
 func (c *clientV2) UpgradeSnappy() error {
 	c.writeLock.Lock()
 	defer c.writeLock.Unlock()

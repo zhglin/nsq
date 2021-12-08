@@ -23,7 +23,7 @@ type Registrations []Registration
 
 // PeerInfo client信息 tcp传来的json字符串
 type PeerInfo struct {
-	lastUpdate       int64  // 最后一个报文的时间戳
+	lastUpdate       int64  // 最后一个报文的时间戳 ping
 	id               string //  客户端地址
 	RemoteAddress    string `json:"remote_address"`
 	Hostname         string `json:"hostname"` // 主机名
@@ -33,10 +33,11 @@ type PeerInfo struct {
 	Version          string `json:"version"`   // 协议版本号
 }
 
+// Producer nspd客户端信息
 type Producer struct {
 	peerInfo     *PeerInfo
-	tombstoned   bool
-	tombstonedAt time.Time
+	tombstoned   bool      // 标记此节点是删除状态
+	tombstonedAt time.Time // 标记的时间
 }
 
 type Producers []*Producer
@@ -146,9 +147,11 @@ func (r *RegistrationDB) FindRegistrations(category string, key string, subkey s
 	return results
 }
 
+// FindProducers 返回nsqd链接信息
 func (r *RegistrationDB) FindProducers(category string, key string, subkey string) Producers {
 	r.RLock()
 	defer r.RUnlock()
+	// 没有通配符
 	if !r.needFilter(key, subkey) {
 		k := Registration{category, key, subkey}
 		return ProducerMap2Slice(r.registrationMap[k])
@@ -171,7 +174,7 @@ func (r *RegistrationDB) FindProducers(category string, key string, subkey strin
 	return retProducers
 }
 
-// LookupRegistrations 查看所有类型的Registrations中的id
+// LookupRegistrations 查看所有类型的Registrations中的指定id的Registration
 func (r *RegistrationDB) LookupRegistrations(id string) Registrations {
 	r.RLock()
 	defer r.RUnlock()
@@ -199,6 +202,7 @@ func (k Registration) IsMatch(category string, key string, subkey string) bool {
 	return true
 }
 
+// Filter 过滤出来指定的Registration
 func (rr Registrations) Filter(category string, key string, subkey string) Registrations {
 	output := Registrations{}
 	for _, k := range rr {
@@ -209,6 +213,7 @@ func (rr Registrations) Filter(category string, key string, subkey string) Regis
 	return output
 }
 
+// Keys 取指定的keys
 func (rr Registrations) Keys() []string {
 	keys := make([]string, len(rr))
 	for i, k := range rr {
@@ -226,6 +231,7 @@ func (rr Registrations) SubKeys() []string {
 	return subkeys
 }
 
+// FilterByActive 返回有效的producer
 func (pp Producers) FilterByActive(inactivityTimeout time.Duration, tombstoneLifetime time.Duration) Producers {
 	now := time.Now()
 	results := Producers{}

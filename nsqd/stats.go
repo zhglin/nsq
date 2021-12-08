@@ -29,6 +29,7 @@ type TopicStats struct {
 	E2eProcessingLatency *quantile.Result `json:"e2e_processing_latency"`
 }
 
+// NewTopicStats topic状态
 func NewTopicStats(t *Topic, channels []ChannelStats) TopicStats {
 	return TopicStats{
 		TopicName:    t.name,
@@ -59,6 +60,7 @@ type ChannelStats struct {
 	E2eProcessingLatency *quantile.Result `json:"e2e_processing_latency"`
 }
 
+// NewChannelStats channel状态信息
 func NewChannelStats(c *Channel, clients []ClientStats, clientCount int) ChannelStats {
 	c.inFlightMutex.Lock()
 	inflight := len(c.inFlightMessages)
@@ -106,59 +108,60 @@ type ChannelsByName struct {
 
 func (c ChannelsByName) Less(i, j int) bool { return c.Channels[i].name < c.Channels[j].name }
 
+// GetStats 获取topic，channel的状态
 func (n *NSQD) GetStats(topic string, channel string, includeClients bool) Stats {
 	var stats Stats
 
 	n.RLock()
 	var realTopics []*Topic
-	if topic == "" {
+	if topic == "" { // 全量topic
 		realTopics = make([]*Topic, 0, len(n.topicMap))
 		for _, t := range n.topicMap {
 			realTopics = append(realTopics, t)
 		}
-	} else if val, exists := n.topicMap[topic]; exists {
+	} else if val, exists := n.topicMap[topic]; exists { // 指定topic
 		realTopics = []*Topic{val}
-	} else {
+	} else { // 指定topic不存在
 		n.RUnlock()
 		return stats
 	}
 	n.RUnlock()
-	sort.Sort(TopicsByName{realTopics})
+	sort.Sort(TopicsByName{realTopics}) // 根据topic名称进行排序
 
 	topics := make([]TopicStats, 0, len(realTopics))
 
 	for _, t := range realTopics {
 		t.RLock()
 		var realChannels []*Channel
-		if channel == "" {
+		if channel == "" { // 所有channel
 			realChannels = make([]*Channel, 0, len(t.channelMap))
 			for _, c := range t.channelMap {
 				realChannels = append(realChannels, c)
 			}
-		} else if val, exists := t.channelMap[channel]; exists {
+		} else if val, exists := t.channelMap[channel]; exists { // 指定channel
 			realChannels = []*Channel{val}
 		} else {
 			t.RUnlock()
 			continue
 		}
 		t.RUnlock()
-		sort.Sort(ChannelsByName{realChannels})
+		sort.Sort(ChannelsByName{realChannels}) // 按channel的名字进行排序
 		channels := make([]ChannelStats, 0, len(realChannels))
 		for _, c := range realChannels {
 			var clients []ClientStats
 			var clientCount int
 			c.RLock()
 			if includeClients {
-				clients = make([]ClientStats, 0, len(c.clients))
+				clients = make([]ClientStats, 0, len(c.clients)) // 客户端链接信息
 				for _, client := range c.clients {
 					clients = append(clients, client.Stats(topic))
 				}
 			}
 			clientCount = len(c.clients)
 			c.RUnlock()
-			channels = append(channels, NewChannelStats(c, clients, clientCount))
+			channels = append(channels, NewChannelStats(c, clients, clientCount)) // channel状态信息
 		}
-		topics = append(topics, NewTopicStats(t, channels))
+		topics = append(topics, NewTopicStats(t, channels)) // topic状态
 	}
 	stats.Topics = topics
 
@@ -189,6 +192,7 @@ type memStats struct {
 	GCTotalRuns       uint32 `json:"gc_total_runs"`
 }
 
+// 节点内存信息
 func getMemStats() memStats {
 	var ms runtime.MemStats
 	runtime.ReadMemStats(&ms)

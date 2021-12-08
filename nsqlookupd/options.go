@@ -18,8 +18,8 @@ type Options struct {
 	HTTPAddress      string `flag:"http-address"`      // listen http地址端口号
 	BroadcastAddress string `flag:"broadcast-address"` // http访问的地址
 
-	InactiveProducerTimeout time.Duration `flag:"inactive-producer-timeout"`
-	TombstoneLifetime       time.Duration `flag:"tombstone-lifetime"`
+	InactiveProducerTimeout time.Duration `flag:"inactive-producer-timeout"` // 超过多久未ping的客户端标记为非active
+	TombstoneLifetime       time.Duration `flag:"tombstone-lifetime"`        // tombstone的nsqd节点继续存活的时间
 }
 
 // NewOptions 创建默认的配置

@@ -19,10 +19,11 @@ import (
 
 const maxTimeout = time.Hour
 
+// 消息类型
 const (
-	frameTypeResponse int32 = 0 // 分段报文 多个响应报文
-	frameTypeError    int32 = 1
-	frameTypeMessage  int32 = 2
+	frameTypeResponse int32 = 0 // 正常的响应报文
+	frameTypeError    int32 = 1 // 错误消息
+	frameTypeMessage  int32 = 2 // message消息
 )
 
 var separatorBytes = []byte(" ")           // 命令与参数的分隔符
@@ -166,7 +167,7 @@ func (p *protocolV2) Send(client *clientV2, frameType int32, data []byte) error 
 		client.SetWriteDeadline(zeroTime)
 	}
 
-	// 分段发送
+	// 消息编码
 	_, err := protocol.SendFramedResponse(client.Writer, frameType, data)
 	if err != nil {
 		client.writeLock.Unlock()
@@ -258,13 +259,13 @@ func (p *protocolV2) messagePump(client *clientV2, startedChan chan bool) {
 	close(startedChan)
 
 	for {
-		// 没有订阅channel || 没有rdy报文
+		// 没有订阅channel || 没有rdy报文 (是否向client发送消息)
 		if subChannel == nil || !client.IsReadyForMessages() {
 			// the client is not ready to receive messages...
 			// 客户端还没有准备好接收消息…
 			memoryMsgChan = nil  // 内存队列
 			backendMsgChan = nil // 后端队列
-			flusherChan = nil
+			flusherChan = nil    // 刷新写缓冲的时间间隔
 			// force flush 强制刷新缓冲区数据写入client
 			client.writeLock.Lock()
 			err = client.Flush()
@@ -301,7 +302,7 @@ func (p *protocolV2) messagePump(client *clientV2, startedChan chan bool) {
 				goto exit
 			}
 			flushed = true
-		case <-client.ReadyStateChan: // 客户端RDY的通知
+		case <-client.ReadyStateChan: // 客户端变更的通知
 		case subChannel = <-subEventChan: // 取出client订阅的channel
 			// you can't SUB anymore 一个client只能订阅一个channel
 			subEventChan = nil
@@ -363,10 +364,13 @@ func (p *protocolV2) messagePump(client *clientV2, startedChan chan bool) {
 			if sampleRate > 0 && rand.Int31n(100) > sampleRate {
 				continue
 			}
-			msg.Attempts++
+			msg.Attempts++ // 计算已发送给客户端的次数
 
+			// 添加到inFlight队列中 计算超时
 			subChannel.StartInFlightTimeout(msg, client.ID, msgTimeout)
+			// 统计计数
 			client.SendingMessage()
+			// 写入客户端缓冲区
 			err = p.SendMessage(client, msg)
 			if err != nil {
 				goto exit
@@ -539,6 +543,7 @@ func (p *protocolV2) IDENTIFY(client *clientV2, params [][]byte) ([]byte, error)
 	return nil, nil
 }
 
+// AUTH 对客户端进行身份验证 第三方系统
 func (p *protocolV2) AUTH(client *clientV2, params [][]byte) ([]byte, error) {
 	// 初始化时进行身份校验
 	if atomic.LoadInt32(&client.State) != stateInit {
@@ -716,6 +721,7 @@ func (p *protocolV2) SUB(client *clientV2, params [][]byte) ([]byte, error) {
 	return okBytes, nil
 }
 
+// RDY 更新RDY状态(表示您已经准备好接收N条消息)
 func (p *protocolV2) RDY(client *clientV2, params [][]byte) ([]byte, error) {
 	state := atomic.LoadInt32(&client.State)
 
@@ -747,6 +753,7 @@ func (p *protocolV2) RDY(client *clientV2, params [][]byte) ([]byte, error) {
 	if count < 0 || count > p.nsqd.getOpts().MaxRdyCount {
 		// this needs to be a fatal error otherwise clients would have
 		// inconsistent state
+		// 这需要是一个致命错误，否则客户端将有不一致的状态
 		return nil, protocol.NewFatalClientErr(nil, "E_INVALID",
 			fmt.Sprintf("RDY count %d out of range 0-%d", count, p.nsqd.getOpts().MaxRdyCount))
 	}
@@ -757,6 +764,7 @@ func (p *protocolV2) RDY(client *clientV2, params [][]byte) ([]byte, error) {
 	return nil, nil
 }
 
+// FIN 完成一条消息(表示处理成功)
 func (p *protocolV2) FIN(client *clientV2, params [][]byte) ([]byte, error) {
 	state := atomic.LoadInt32(&client.State)
 	if state != stateSubscribed && state != stateClosing {
@@ -833,11 +841,13 @@ func (p *protocolV2) REQ(client *clientV2, params [][]byte) ([]byte, error) {
 	return nil, nil
 }
 
+// CLS 干净利落地关闭连接(不再发送消息)
 func (p *protocolV2) CLS(client *clientV2, params [][]byte) ([]byte, error) {
 	if atomic.LoadInt32(&client.State) != stateSubscribed {
 		return nil, protocol.NewFatalClientErr(nil, "E_INVALID", "cannot CLS in current state")
 	}
 
+	// 只是标记为close 不在发送消息
 	client.StartClose()
 
 	return []byte("CLOSE_WAIT"), nil
@@ -847,6 +857,7 @@ func (p *protocolV2) NOP(client *clientV2, params [][]byte) ([]byte, error) {
 	return nil, nil
 }
 
+// PUB 将消息发布到主题
 func (p *protocolV2) PUB(client *clientV2, params [][]byte) ([]byte, error) {
 	var err error
 
@@ -903,6 +914,7 @@ func (p *protocolV2) PUB(client *clientV2, params [][]byte) ([]byte, error) {
 	return okBytes, nil
 }
 
+// MPUB 将多条消息(原子地)发布到一个主题
 func (p *protocolV2) MPUB(client *clientV2, params [][]byte) ([]byte, error) {
 	var err error
 
@@ -964,19 +976,23 @@ func (p *protocolV2) MPUB(client *clientV2, params [][]byte) ([]byte, error) {
 	return okBytes, nil
 }
 
+// DPUB 向topic发布延时消息
 func (p *protocolV2) DPUB(client *clientV2, params [][]byte) ([]byte, error) {
 	var err error
 
+	// 参数长度
 	if len(params) < 3 {
 		return nil, protocol.NewFatalClientErr(nil, "E_INVALID", "DPUB insufficient number of parameters")
 	}
 
+	// topic名称
 	topicName := string(params[1])
 	if !protocol.IsValidTopicName(topicName) {
 		return nil, protocol.NewFatalClientErr(nil, "E_BAD_TOPIC",
 			fmt.Sprintf("DPUB topic name %q is not valid", topicName))
 	}
 
+	// 延迟时间
 	timeoutMs, err := protocol.ByteToBase10(params[2])
 	if err != nil {
 		return nil, protocol.NewFatalClientErr(err, "E_INVALID",
@@ -990,6 +1006,7 @@ func (p *protocolV2) DPUB(client *clientV2, params [][]byte) ([]byte, error) {
 				timeoutMs, p.nsqd.getOpts().MaxReqTimeout/time.Millisecond))
 	}
 
+	// 读取消息长度
 	bodyLen, err := readLen(client.Reader, client.lenSlice)
 	if err != nil {
 		return nil, protocol.NewFatalClientErr(err, "E_BAD_MESSAGE", "DPUB failed to read message body size")
@@ -1005,6 +1022,7 @@ func (p *protocolV2) DPUB(client *clientV2, params [][]byte) ([]byte, error) {
 			fmt.Sprintf("DPUB message too big %d > %d", bodyLen, p.nsqd.getOpts().MaxMsgSize))
 	}
 
+	// 读取消息内容
 	messageBody := make([]byte, bodyLen)
 	_, err = io.ReadFull(client.Reader, messageBody)
 	if err != nil {
@@ -1015,19 +1033,22 @@ func (p *protocolV2) DPUB(client *clientV2, params [][]byte) ([]byte, error) {
 		return nil, err
 	}
 
+	// 获取topic
 	topic := p.nsqd.GetTopic(topicName)
 	msg := NewMessage(topic.GenerateID(), messageBody)
-	msg.deferred = timeoutDuration
-	err = topic.PutMessage(msg)
+	msg.deferred = timeoutDuration // 标记延迟时间
+	err = topic.PutMessage(msg)    // 写入topic
 	if err != nil {
 		return nil, protocol.NewFatalClientErr(err, "E_DPUB_FAILED", "DPUB failed "+err.Error())
 	}
 
+	// 统计计数
 	client.PublishedMessage(topicName, 1)
 
 	return okBytes, nil
 }
 
+// TOUCH 重置单个正在发送的消息的超时时间
 func (p *protocolV2) TOUCH(client *clientV2, params [][]byte) ([]byte, error) {
 	state := atomic.LoadInt32(&client.State)
 	if state != stateSubscribed && state != stateClosing {
@@ -1046,6 +1067,7 @@ func (p *protocolV2) TOUCH(client *clientV2, params [][]byte) ([]byte, error) {
 	client.writeLock.RLock()
 	msgTimeout := client.MsgTimeout
 	client.writeLock.RUnlock()
+	// 重置超时时间
 	err = client.Channel.TouchMessage(client.ID, *id, msgTimeout)
 	if err != nil {
 		return nil, protocol.NewClientErr(err, "E_TOUCH_FAILED",
@@ -1103,6 +1125,7 @@ func readMPUB(r io.Reader, tmp []byte, topic *Topic, maxMessageSize int64, maxBo
 }
 
 // validate and cast the bytes on the wire to a message ID
+// 验证并将连接中的字节转换为消息ID
 func getMessageID(p []byte) (*MessageID, error) {
 	if len(p) != MsgIDLength {
 		return nil, errors.New("Invalid Message ID")

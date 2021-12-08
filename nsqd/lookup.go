@@ -179,7 +179,7 @@ func (n *NSQD) lookupLoop() {
 			}
 			lookupPeers = tmpPeers
 			lookupAddrs = tmpAddrs
-			connect = true // 不需要再进行connect
+			connect = true // 需要再进行connect
 		case <-n.exitChan:
 			goto exit
 		}

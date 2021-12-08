@@ -36,10 +36,10 @@ func newHTTPServer(l *NSQLookupd) *httpServer {
 
 	// v1 negotiate
 	router.Handle("GET", "/debug", http_api.Decorate(s.doDebug, log, http_api.V1))
-	router.Handle("GET", "/lookup", http_api.Decorate(s.doLookup, log, http_api.V1))
+	router.Handle("GET", "/lookup", http_api.Decorate(s.doLookup, log, http_api.V1)) // 获取指定topic的nsqd
 	router.Handle("GET", "/topics", http_api.Decorate(s.doTopics, log, http_api.V1))
 	router.Handle("GET", "/channels", http_api.Decorate(s.doChannels, log, http_api.V1)) // 获取topic下的所有channel名称
-	router.Handle("GET", "/nodes", http_api.Decorate(s.doNodes, log, http_api.V1))
+	router.Handle("GET", "/nodes", http_api.Decorate(s.doNodes, log, http_api.V1))       // 获取此lookupd下的所有nsqd节点信息(topic,tombstone)
 
 	// only v1
 	router.Handle("POST", "/topic/create", http_api.Decorate(s.doCreateTopic, log, http_api.V1))
@@ -267,15 +267,19 @@ type node struct {
 
 func (s *httpServer) doNodes(w http.ResponseWriter, req *http.Request, ps httprouter.Params) (interface{}, error) {
 	// dont filter out tombstoned nodes
+	// 不要过滤掉tombstone节点
 	producers := s.nsqlookupd.DB.FindProducers("client", "", "").FilterByActive(
 		s.nsqlookupd.opts.InactiveProducerTimeout, 0)
 	nodes := make([]*node, len(producers))
 	topicProducersMap := make(map[string]Producers)
+	// 所有活跃的producers
 	for i, p := range producers {
+		// 指定producer所有的topic名称
 		topics := s.nsqlookupd.DB.LookupRegistrations(p.peerInfo.id).Filter("topic", "*", "").Keys()
 
 		// for each topic find the producer that matches this peer
 		// to add tombstone information
+		// 为每个主题找到匹配这个对等体的生产者来添加墓碑信息
 		tombstones := make([]bool, len(topics))
 		for j, t := range topics {
 			if _, exists := topicProducersMap[t]; !exists {
@@ -298,8 +302,8 @@ func (s *httpServer) doNodes(w http.ResponseWriter, req *http.Request, ps httpro
 			TCPPort:          p.peerInfo.TCPPort,
 			HTTPPort:         p.peerInfo.HTTPPort,
 			Version:          p.peerInfo.Version,
-			Tombstones:       tombstones,
-			Topics:           topics,
+			Tombstones:       tombstones, // 所有topic的tombstone信息
+			Topics:           topics,     // 所有的topic
 		}
 	}
 

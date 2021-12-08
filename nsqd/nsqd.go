@@ -53,7 +53,7 @@ type NSQD struct {
 	isLoading int32            // 启动中 从本地文件加载topic相关元数据
 	isExiting int32
 	errValue  atomic.Value // 记录操作中的error
-	startTime time.Time    // 当前时间
+	startTime time.Time    // 启动时间
 
 	topicMap map[string]*Topic // topic信息 name=>Topic
 
@@ -220,10 +220,12 @@ func (n *NSQD) RealHTTPSAddr() *net.TCPAddr {
 	return n.httpsListener.Addr().(*net.TCPAddr)
 }
 
+// SetHealth 消息写入异常topic || channel写入异常的记录
 func (n *NSQD) SetHealth(err error) {
 	n.errValue.Store(errStore{err: err})
 }
 
+// IsHealthy nsqd健康检查
 func (n *NSQD) IsHealthy() bool {
 	return n.GetError() == nil
 }
@@ -519,7 +521,7 @@ func (n *NSQD) GetTopic(topicName string) *Topic {
 
 	// if using lookupd, make a blocking call to get channels and immediately create them
 	// to ensure that all channels receive published messages
-	// 如果使用lookupd，则阻塞调用获取channel，并立即创建channel，以确保所有通道都接收到已发布的消息
+	// 如果使用lookupd，则阻塞调用获取channel，并立即创建channel，以确保所有channel都接收到已发布的消息
 	lookupdHTTPAddrs := n.lookupdHTTPAddrs()
 	if len(lookupdHTTPAddrs) > 0 {
 		channelNames, err := n.ci.GetLookupdTopicChannels(t.name, lookupdHTTPAddrs)
@@ -542,6 +544,7 @@ func (n *NSQD) GetTopic(topicName string) *Topic {
 }
 
 // GetExistingTopic gets a topic only if it exists
+// 仅在主题存在时获取主题
 func (n *NSQD) GetExistingTopic(topicName string) (*Topic, error) {
 	n.RLock()
 	defer n.RUnlock()
@@ -591,6 +594,7 @@ func (n *NSQD) Notify(v interface{}, persist bool) {
 	n.waitGroup.Wrap(func() {
 		// by selecting on exitChan we guarantee that
 		// we do not block exit, see issue #123
+		// 通过选择exitChan，我们保证不会阻塞退出
 		select {
 		case <-n.exitChan:
 		case n.notifyChan <- v:
@@ -665,6 +669,7 @@ func (n *NSQD) queueScanWorker(workCh chan *Channel, responseCh chan bool, close
 			if c.processInFlightQueue(now) {
 				dirty = true
 			}
+			// 延迟消息处理
 			if c.processDeferredQueue(now) {
 				dirty = true
 			}

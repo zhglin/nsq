@@ -19,14 +19,14 @@ type Message struct {
 	ID        MessageID // 消息id
 	Body      []byte    // 消息内容
 	Timestamp int64     // 创建的当前时间戳
-	Attempts  uint16
+	Attempts  uint16    // 发送到客户端的次数
 
 	// for in-flight handling
 	deliveryTS time.Time     // 发送的当前时间
 	clientID   int64         // 发送给的客户端标识
 	pri        int64         // 超时时间绝对时间
 	index      int           // 在inFlightPqueue中的下标
-	deferred   time.Duration // 延迟消息
+	deferred   time.Duration // 延迟消息的延迟时间
 }
 
 // NewMessage 新建消息体

@@ -47,9 +47,9 @@ type Options struct {
 	// msg and command options
 	MsgTimeout    time.Duration `flag:"msg-timeout"`
 	MaxMsgTimeout time.Duration `flag:"max-msg-timeout"`
-	MaxMsgSize    int64         `flag:"max-msg-size"`  // 一个队列消息的最大长度
-	MaxBodySize   int64         `flag:"max-body-size"` // 支持的最大的报文长度
-	MaxReqTimeout time.Duration `flag:"max-req-timeout"`
+	MaxMsgSize    int64         `flag:"max-msg-size"`    // 一个队列消息的最大长度
+	MaxBodySize   int64         `flag:"max-body-size"`   // 支持的最大的报文长度
+	MaxReqTimeout time.Duration `flag:"max-req-timeout"` // 延迟消息的最大延迟时间
 	ClientTimeout time.Duration // 客户端超时时间  /2 = 心跳检查时间
 
 	// client overridable configuration options

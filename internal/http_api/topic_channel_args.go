@@ -10,6 +10,7 @@ type getter interface {
 	Get(key string) (string, error)
 }
 
+// GetTopicChannelArgs 从http请求中获取topic，channel的名称
 func GetTopicChannelArgs(rp getter) (string, string, error) {
 	topicName, err := rp.Get("topic")
 	if err != nil {
