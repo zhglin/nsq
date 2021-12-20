@@ -82,6 +82,9 @@ func connectCallback(n *NSQD, hostname string) func(*lookupPeer) {
 }
 
 // lookup链接
+// 向所有lookupLoop建立链接发送数据
+// 各个lookupLoop不会同步信息
+// Command函数重新建立链接
 func (n *NSQD) lookupLoop() {
 	var lookupPeers []*lookupPeer
 	var lookupAddrs []string // 已建立链接的lookupd地址

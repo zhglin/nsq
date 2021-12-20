@@ -28,7 +28,7 @@ const (
 
 // 客户端标识信息
 type identifyDataV2 struct {
-	ClientID            string `json:"client_id"`
+	ClientID            string `json:"client_id"` // 客户端配置
 	Hostname            string `json:"hostname"`
 	HeartbeatInterval   int    `json:"heartbeat_interval"`
 	OutputBufferSize    int    `json:"output_buffer_size"`

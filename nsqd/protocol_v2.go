@@ -71,7 +71,7 @@ func (p *protocolV2) IOLoop(c protocol.Client) error {
 		// ReadSlice does not allocate new space for the data each request
 		// ie. the returned slice is only valid until the next call to it
 		// ReadSlice没有为每个请求分配新的空间。返回的切片只在下一次调用之前有效
-		line, err = client.Reader.ReadSlice('\n')
+		line, err = client.Reader.ReadSlice('\n') // 参数与body的分隔符
 		if err != nil {
 			if err == io.EOF {
 				err = nil
